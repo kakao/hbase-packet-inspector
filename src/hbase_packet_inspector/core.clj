@@ -130,7 +130,7 @@ Options:
                               (name table)
                               (str/join ", " (repeat (count columns) "?"))))]))]
     (defn db-insert-pstmt!
-      "Inserts a row into the table using PreparedStatement."
+      "Inserts a row into the table using PreparedStatement"
       [table values]
       (let [pstmt ^PreparedStatement (pstmts table)]
         (doseq [[idx col] (fields-with-index table)
@@ -175,7 +175,7 @@ Options:
   (Pcaps/openOffline path))
 
 (defn ->string-binary
-  "Returns a printable representation of a LiteralByteString
+  "Returns a printable representation of a LiteralByteString.
 
   Bytes/toStringBinary used to be slow, but it's fast since hbase-client 1.2.2.
   See: https://issues.apache.org/jira/browse/HBASE-15569"
@@ -580,7 +580,7 @@ Options:
                  (.getNumPacketsDropped stats)))))
 
 (defn select-nif
-  "Interactive netword interface selector"
+  "Interactive network interface selector. Returns nil if user enters 'q'."
   []
   (some-> (NifSelector.) .selectNetworkInterface .getName))
 
