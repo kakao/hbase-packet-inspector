@@ -1,11 +1,13 @@
 # hbase-packet-inspector
 
-hbase-packet-inspector captures packets to/from HBase region server.
+hbase-packet-inspector analyzes packets to/from HBase region server and builds
+an in-memory database. You can query the database in the command-line shell or
+via its web SQL interface.
 
 ## Usage
 
-hbase-packet-inspector can read tcpdump output files or a live capture from the
-network (the latter requires root permission).
+hbase-packet-inspector can read tcpdump output files or a live capture from a
+network interface (the latter requires root permission).
 
 ```sh
 Usage:
@@ -27,7 +29,7 @@ Options:
 tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
 ./hbase-packet-inspector dump.pcap
 
-# Reading from a live capture
+# Reading from a live capture; captures the packets until you press enter
 sudo ./hbase-packet-inspector
 ```
 
