@@ -157,9 +157,9 @@ Options:
        :data   (and data (.. data getRawData))})))
 
 (defn ^PcapHandle live-handle
-  "Opens PcapHandle for the device"
-  [device ports]
-  (let [handle (.. (PcapHandle$Builder. device)
+  "Opens PcapHandle for the interface"
+  [interface ports]
+  (let [handle (.. (PcapHandle$Builder. interface)
                    (snaplen (* 1024 64))
                    (promiscuousMode PcapNetworkInterface$PromiscuousMode/NONPROMISCUOUS)
                    (timeoutMillis 1000)
@@ -523,8 +523,8 @@ Options:
 
 (defn get-next-packet
   "Retrieves the next packet from the handle. getNextPacketEx can throw
-  TimeoutException if there is no new packet for the device or when the packet
-  is buffered by OS. This function retries in that case."
+  TimeoutException if there is no new packet for the interface or when the
+  packet is buffered by OS. This function retries in that case."
   [^PcapHandle handle]
   (loop []
     (let [result (try
@@ -564,10 +564,10 @@ Options:
   (with-open [handle (file-handle file-name)]
     (read-handle handle port verbose count)))
 
-(defn read-net-device
-  "Captures packets from the device and loads into the database"
-  [device & {:keys [port verbose count]}]
-  (with-open [handle (live-handle device hbase-ports)]
+(defn read-net-interface
+  "Captures packets from the interface and loads into the database"
+  [interface & {:keys [port verbose count]}]
+  (with-open [handle (live-handle interface hbase-ports)]
     (log/info "Press enter key to stop capturing")
     (let [f (future (read-handle handle port verbose count))]
       (read-line)
@@ -609,11 +609,11 @@ Options:
 (defn -main
   [& args]
   (let [{:keys [options arguments errors]} (parse-opts args cli-options)
-        {:keys [port verbose count device help]} options]
+        {:keys [port verbose count interface help]} options]
     (cond
       help   (print-usage! 0)
       errors (print-usage! 1 (first errors))
-      (and device (seq arguments)) (print-usage! 1))
+      (and interface (seq arguments)) (print-usage! 1))
 
     (log/info "Creating database schema")
     (create-db)
@@ -624,8 +624,8 @@ Options:
         (log/info "Loading" file)
         (read-pcap-file file :port port :verbose verbose :count count))
       ;;; From a live capture
-      (read-net-device (or device (select-nif))
-                       :port port :verbose verbose :count count))
+      (read-net-interface (or interface (select-nif))
+                          :port port :verbose verbose :count count))
 
     (let [{:keys [server url]} (start-web-server)]
       (log/info "Started web server:" url)
