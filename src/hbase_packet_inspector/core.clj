@@ -582,7 +582,7 @@ Options:
 (defn select-nif
   "Interactive netword interface selector"
   []
-  (.. (NifSelector.) selectNetworkInterface getName))
+  (some-> (NifSelector.) .selectNetworkInterface .getName))
 
 (defn start-shell
   "Starts interactive command-line SQL client"
@@ -624,7 +624,7 @@ Options:
         (log/info "Loading" file)
         (read-pcap-file file :port port :verbose verbose :count count))
       ;;; From a live capture
-      (read-net-interface (or interface (select-nif))
+      (read-net-interface (or interface (select-nif) (System/exit 1))
                           :port port :verbose verbose :count count))
 
     (let [{:keys [server url]} (start-web-server)]
