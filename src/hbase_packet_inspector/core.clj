@@ -64,12 +64,11 @@ Options:
   "Default set of ports relevant to HBase region server"
   #{16020 60020})
 
-(defonce ^{:doc "In-memory h2 database"} db
-  {:connection
-   (jdbc/get-connection
-     {:classname   "org.h2.Driver"
-      :subprotocol "h2:mem"
-      :subname     "hbase;DB_CLOSE_DELAY=-1;LOG=0;UNDO_LOG=0;LOCK_MODE=0"})})
+(defonce ^{:doc "In-memory h2 database"} db-connection
+  (jdbc/get-connection
+    {:classname   "org.h2.Driver"
+     :subprotocol "h2:mem"
+     :subname     "hbase;DB_CLOSE_DELAY=-1;LOG=0;UNDO_LOG=0;LOCK_MODE=0"}))
 
 (def schema
   "Database schema"
@@ -102,7 +101,7 @@ Options:
 (defn db-execute!
   "Executes SQL with the database"
   [sql]
-  (with-open [^Statement stmt (-> db :connection .createStatement)]
+  (with-open [^Statement stmt (-> db-connection .createStatement)]
     (.execute stmt sql)))
 
 (let [fields (into {} (for [[table specs] schema]
@@ -126,7 +125,7 @@ Options:
         (into {} (for [[table columns] fields]
                    [table
                     (jdbc/prepare-statement
-                      (:connection db)
+                      db-connection
                       (format "insert into %s values(%s)"
                               (name table)
                               (str/join ", " (repeat (count columns) "?"))))]))]
@@ -588,7 +587,7 @@ Options:
 (defn start-shell
   "Starts interactive command-line SQL client"
   []
-  (.runTool (Shell.) (:connection db) (make-array String 0)))
+  (.runTool (Shell.) db-connection (make-array String 0)))
 
 (defn start-web-server
   "Starts web server for h2 database"
@@ -596,7 +595,7 @@ Options:
   (let [ws (WebServer.)
         s  (doto (Server. ws (into-array String ["-webPort" "0" "-webAllowOthers"]))
              .start)
-        url (.addSession ws (:connection db))]
+        url (.addSession ws db-connection)]
     {:server s :url url}))
 
 (defn- print-usage!
