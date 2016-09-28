@@ -33,6 +33,13 @@ tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
 sudo ./hbase-packet-inspector
 ```
 
+## Build
+
+```sh
+# Requires leiningen
+lein bin
+```
+
 ## License
 
 This software is licensed under the [Apache 2 license](LICENSE.txt), quoted below.
