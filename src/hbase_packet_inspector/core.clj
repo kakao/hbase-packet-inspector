@@ -68,6 +68,15 @@ Options:
   "Default set of ports relevant to HBase region server"
   #{16020 60020})
 
+(def state-expiration-ms
+  "Any state object that stayed over this period will be expired"
+  12000)
+
+(def report-interval
+  "Progress report interval"
+  {:count 10000
+   :ms    2000})
+
 (defonce ^{:doc "In-memory h2 database"} db-connection
   (jdbc/get-connection
     {:classname   "org.h2.Driver"
@@ -395,7 +404,7 @@ Options:
 (defn process-scan-state
   "Manages state transition during Scan lifecycle"
   [state client parsed]
-  (let [{:keys [method inbound? call-id scanner]} parsed
+  (let [{:keys [method inbound? call-id scanner ts]} parsed
         region-info (select-keys (state [:scanner scanner]) [:table :region])]
     (match [method inbound?]
 
@@ -412,8 +421,10 @@ Options:
         [state (merge request parsed)])
 
       ;;; 3. Attach region info from the Scan request for the scanner-id
+      ;;;    and update timestamp of the scanner state
       [:next-rows _]
-      [state (merge parsed region-info)]
+      [(update state [:scanner scanner] assoc :ts ts)
+       (merge parsed region-info)]
 
       ;;; 4. Discard Scan request from the state
       [:close-scanner true]
@@ -562,6 +573,20 @@ Options:
         (recur)
         result))))
 
+(defn trim-state
+  "Removes state objects that are not handled correctly within the period"
+  [state latest-ts]
+  (let [latest-ts (.getTime ^Timestamp latest-ts)
+        new-state (->> state
+                       (remove (fn [[_ v]]
+                                 (let [tdiff (- latest-ts (.getTime ^Timestamp (:ts v)))]
+                                   (> tdiff state-expiration-ms))))
+                       (into {}))
+        xcount    (- (count state) (count new-state))]
+    (when (pos? xcount)
+      (log/infof "Expired %d state object(s)" xcount))
+    new-state))
+
 (defn read-handle
   "Reads packets from the handle"
   [^PcapHandle handle port verbose count]
@@ -569,17 +594,25 @@ Options:
   (let [logger #(log/infof "Processed %d packet(s)" %)
         ports  (if port (hash-set port) hbase-ports)]
     (loop [state {}
-           seen  0]
+           seen  0
+           prev  {:seen 0 :ts (System/currentTimeMillis)}]
       (if-let [packet (try (get-next-packet handle)
                            (catch InterruptedException _ nil))]
-        (let [new-state (process-hbase-packet
-                          packet ports (.getTimestamp handle) state #(db-insert! % verbose))
-              seen      (inc seen)]
-          (when (zero? (mod seen 10000))
-            ;;; TODO Remove dangling byte streams based on :ts
+        (let [latest-ts (.getTimestamp handle)
+              new-state (process-hbase-packet
+                          packet ports latest-ts state #(db-insert! % verbose))
+              now       (System/currentTimeMillis)
+              seen      (inc seen)
+              tdiff     (- now  (:ts   prev))
+              diff      (- seen (:seen prev))
+              print?    (or (>= tdiff (:ms report-interval))
+                            (>= diff  (:count report-interval)))]
+          (when print?
             (logger seen))
           (if (or (nil? count) (< seen count))
-            (recur new-state seen)
+            (if print?
+              (recur (trim-state new-state latest-ts) seen {:seen seen :ts now})
+              (recur new-state seen prev))
             (logger seen)))
         (logger seen)))))
 

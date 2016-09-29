@@ -4,7 +4,8 @@
             [clojure.tools.cli :refer [parse-opts]]
             [hbase-packet-inspector.core :refer :all])
   (:import (com.google.protobuf ByteString
-                                LiteralByteString)))
+                                LiteralByteString)
+           (java.sql Timestamp)))
 
 (deftest test-cli-options
   (testing "Combo"
@@ -44,6 +45,7 @@
         open-req {:method   :open-scanner
                   :inbound? true
                   :call-id  100
+                  :ts       2016
                   :table    "foo"
                   :region   "bar"}
         [state1  _] (process-scan-state state0 client open-req)
@@ -54,15 +56,17 @@
                   :scanner  1000}
         [state2 open-res*] (process-scan-state state1 client open-res)
 
-        next-req {:method  :next-rows
+        next-req {:method   :next-rows
                   :inbound? true
-                  :scanner 1000}
+                  :ts       2017
+                  :scanner  1000}
         [state3 next-req*] (process-scan-state state2 client next-req)
 
         next-res {:method   :next-rows
                   :inbound? false
+                  :ts       2018
                   :scanner  1000}
-        [state4 next-res*] (process-scan-state state3 client next-req)
+        [state4 next-res*] (process-scan-state state3 client next-res)
 
         close-req {:method :close-scanner
                    :inbound? true
@@ -85,8 +89,19 @@
     (is (every? next-req* [:region :table]))
     (is (every? next-res* [:region :table]))
 
-    ;;; next-rows does not affect the state.
-    (is (= state4 state3 state2))
+    ;;; next-rows only updates :ts
+    (is (= 2016 (-> state2 first val :ts)))
+    (is (= 2017 (-> state3 first val :ts)))
+    (is (= 2018 (-> state4 first val :ts)))
+    (is (apply = (map #(map (fn [[k v]] [k (dissoc v :ts)]) %)
+                      [state4 state3 state2])))
 
     ;;; close-scanner will remove scanner entry from the state
     (is (empty? state5))))
+
+(deftest test-trim-state
+  (let [now-ms (System/currentTimeMillis)
+        state {:new {:ts (Timestamp. now-ms)}
+               :old {:ts (Timestamp. (- now-ms state-expiration-ms))}}]
+    (is (= 2 (count (trim-state state (Timestamp. (dec now-ms))))))
+    (is (= 1 (count (trim-state state (Timestamp. (inc now-ms))))))))
