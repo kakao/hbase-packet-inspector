@@ -16,9 +16,13 @@
                                                        ClientProtos$GetRequest
                                                        ClientProtos$GetResponse
                                                        ClientProtos$MultiRequest
+                                                       ClientProtos$MultiResponse
                                                        ClientProtos$MutateRequest
                                                        ClientProtos$MutationProto
                                                        ClientProtos$RegionAction
+                                                       ClientProtos$RegionActionResult
+                                                       ClientProtos$Result
+                                                       ClientProtos$ResultOrException
                                                        ClientProtos$ScanRequest
                                                        ClientProtos$ScanResponse
                                                        RPCProtos$RequestHeader
@@ -95,8 +99,11 @@ Options:
                            [:row        "varchar(500)"]
                            [:cells      "int"]
                            [:durability "varchar(20)"]]}]
-    (assoc schema :responses
-           (conj (:requests schema) [:error "varchar(300)"] [:elapsed "int"]))))
+    (assoc schema
+           :responses
+           (conj (:requests schema) [:error "varchar(300)"] [:elapsed "int"])
+           :results
+           (conj (:actions schema)  [:error "varchar(300)"]))))
 
 (defn db-execute!
   "Executes SQL with the database"
@@ -256,17 +263,15 @@ Options:
   "Parses MultiRequest and returns the list of actions"
   [^ClientProtos$MultiRequest multi-request]
   (let [region-actions (.. multi-request getRegionActionList)]
-    (flatten
-      (for [^ClientProtos$RegionAction region-action region-actions]
-        (let [region  (parse-region-name (.. region-action getRegion getValue))
-              actions (.. region-action getActionList)]
-          (for [^ClientProtos$Action action actions]
-            (merge
-              (if (.hasGet action)
-                {:method :get
-                 :row    (->string-binary (.. action getGet getRow))}
-                (parse-mutation (.. action getMutation)))
-              region)))))))
+    (for [^ClientProtos$RegionAction region-action region-actions
+          ^ClientProtos$Action action (.. region-action getActionList)
+          :let [region (parse-region-name (.. region-action getRegion getValue))]]
+      (merge
+        (if (.hasGet action)
+          {:method :get
+           :row    (->string-binary (.. action getGet getRow))}
+          (parse-mutation (.. action getMutation)))
+        region))))
 
 (defn parse-request
   "Processes request from client"
@@ -315,6 +320,21 @@ Options:
   {:cells (+ (.. response getResult getAssociatedCellCount)
              (.. response getResult getCellList size))})
 
+(defn parse-multi-response
+  "Parses MultiResponse to extract the number of cells"
+  [^ClientProtos$MultiResponse response actions]
+  (let [results (for [^ClientProtos$RegionActionResult region-response     (.getRegionActionResultList response)
+                      ^ClientProtos$ResultOrException  result-or-exception (.getResultOrExceptionList region-response)
+                      :let  [result?    (.hasResult    result-or-exception)
+                             exception? (.hasException result-or-exception)
+                             result     (.getResult result-or-exception)]]
+                  {:cells     (when result? (+ (.. result getAssociatedCellCount)
+                                               (.. result getCellList size)))
+                   :exception (when exception?
+                                (some-> result-or-exception .getException .getName))})]
+    {:cells   (reduce + (filter some? (map :cells results)))
+     :actions (map merge actions results)}))
+
 (defn parse-response
   "Processes response to client. Uses request-fn to find the request map for
   the call-id."
@@ -338,6 +358,10 @@ Options:
         [:get]
         (let [response (ClientProtos$GetResponse/parseDelimitedFrom bais)]
           (parse-get-response response))
+
+        [:multi]
+        (let [response (ClientProtos$MultiResponse/parseDelimitedFrom bais)]
+          (parse-multi-response response (:actions request)))
 
         [_] nil))))
 
@@ -513,12 +537,13 @@ Options:
                                (reduce + (remove nil? (map :cells actions)))))]
     (when verbose
       (log/info info))
-    (when (and inbound? multi?)
+    (when multi?
       (doseq [action actions]
-        (db-insert-pstmt! :actions (assoc action
-                                          :client client
-                                          :port port
-                                          :call-id call-id))))
+        (db-insert-pstmt! (if inbound? :actions :results)
+                          (assoc action
+                                 :client  client
+                                 :port    port
+                                 :call-id call-id))))
     (db-insert-pstmt! table info)))
 
 (defn get-next-packet
