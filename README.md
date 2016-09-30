@@ -33,6 +33,17 @@ tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
 sudo ./hbase-packet-inspector
 ```
 
+## Schema
+
+- requests
+    - actions (for multi requests)
+- responses
+    - results (for multi responses)
+
+Note that `call_id` is not globally unique nor monotonically increasing. Join
+between the tables should be performed on (`client`, `port`, `call_id`)
+columns.
+
 ## Build
 
 ```sh
