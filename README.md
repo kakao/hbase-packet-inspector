@@ -33,6 +33,12 @@ tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
 sudo ./hbase-packet-inspector
 ```
 
+Alternatively, you can start it with java command to pass extra JVM options.
+
+```sh
+java -Xmx2g -jar hbase-packet-inspector --help
+```
+
 ## Schema
 
 - requests
