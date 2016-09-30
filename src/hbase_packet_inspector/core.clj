@@ -10,7 +10,7 @@
            (java.io ByteArrayInputStream ByteArrayOutputStream DataInputStream
                     EOFException)
            (java.sql PreparedStatement Statement Timestamp)
-           (java.util.concurrent CancellationException)
+           (java.util.concurrent CancellationException TimeoutException)
            (org.apache.hadoop.hbase HRegionInfo)
            (org.apache.hadoop.hbase.protobuf.generated ClientProtos$Action
                                                        ClientProtos$GetRequest
@@ -46,9 +46,10 @@ Usage:
 
 Options:
   -h --help                 Show this message
+  -i --interface=INTERFACE  Network interface to monitor
   -p --port=PORT            Port to monitor (default: 16020 and 60020)
   -c --count=COUNT          Maximum number of packets to process
-  -i --interface=INTERFACE  Network interface to monitor
+  -d --duration=DURATION    Number of seconds to capture packets
   -v --verbose              Verbose output")
 
 (def cli-options
@@ -56,6 +57,9 @@ Options:
     :parse-fn #(Integer/parseInt %)
     :validate [#(< 0 % 0x10000) "Must be a number between 0 and 65536"]]
    ["-c" "--count=COUNT"
+    :parse-fn #(Integer/parseInt %)
+    :validate [pos? "Must be a positive integer"]]
+   ["-d" "--duration=DURATION"
     :parse-fn #(Integer/parseInt %)
     :validate [pos? "Must be a positive integer"]]
    ["-i" "--interface=INTERFACE"
@@ -437,6 +441,11 @@ Options:
 
       [_ _] [state parsed])))
 
+(defn sub-ts
+  "Returns the difference of two Timestamps in milliseconds"
+  [^Timestamp ts2 ^Timestamp ts1]
+  (- (.getTime ts2) (.getTime ts1)))
+
 (defn process-hbase-packet
   "Parses the raw packet into a map and executes proc-fn with it.
   Returns the new state for the next iteration. state map can have the
@@ -485,9 +494,8 @@ Options:
                              info (or (some->
                                         (when-not inbound? (request-fn call-id))
                                         :ts
-                                        (as-> $ (- (.getTime ^Timestamp timestamp)
-                                                   (.getTime ^Timestamp $)))
-                                        (->> (assoc info :elapsed)))
+                                        (some->> (sub-ts timestamp)
+                                                 (assoc info :elapsed)))
                                       info)
                              [state info] (process-scan-state state client info)]
                          (proc-fn info)
@@ -565,7 +573,7 @@ Options:
   (loop []
     (let [result (try
                    (.getNextPacketEx handle)
-                   (catch java.util.concurrent.TimeoutException _
+                   (catch TimeoutException _
                      (Thread/sleep 100) ; needed for future-cancel
                      ::retry)
                    (catch java.io.EOFException _ nil))]
@@ -576,11 +584,10 @@ Options:
 (defn trim-state
   "Removes state objects that are not handled correctly within the period"
   [state latest-ts]
-  (let [latest-ts (.getTime ^Timestamp latest-ts)
-        new-state (->> state
+  (let [new-state (->> state
                        (remove (fn [[_ v]]
-                                 (let [tdiff (- latest-ts (.getTime ^Timestamp (:ts v)))]
-                                   (> tdiff state-expiration-ms))))
+                                 (> (sub-ts latest-ts (:ts v))
+                                    state-expiration-ms)))
                        (into {}))
         xcount    (- (count state) (count new-state))]
     (when (pos? xcount)
@@ -589,16 +596,19 @@ Options:
 
 (defn read-handle
   "Reads packets from the handle"
-  [^PcapHandle handle port verbose count]
+  [^PcapHandle handle port verbose count duration]
   {:pre [(or (nil? count) (pos? count))]}
-  (let [logger #(log/infof "Processed %d packet(s)" %)
-        ports  (if port (hash-set port) hbase-ports)]
-    (loop [state {}
-           seen  0
-           prev  {:seen 0 :ts (System/currentTimeMillis)}]
+  (let [logger   #(log/infof "Processed %d packet(s)" %)
+        duration (some-> duration (* 1000))
+        ports    (if port (hash-set port) hbase-ports)]
+    (loop [state    {}
+           first-ts nil
+           seen     0
+           prev     {:seen 0 :ts (System/currentTimeMillis)}]
       (if-let [packet (try (get-next-packet handle)
                            (catch InterruptedException _ nil))]
         (let [latest-ts (.getTimestamp handle)
+              first-ts  (or first-ts latest-ts)
               new-state (process-hbase-packet
                           packet ports latest-ts state #(db-insert! % verbose))
               now       (System/currentTimeMillis)
@@ -609,26 +619,29 @@ Options:
                             (>= diff  (:count report-interval)))]
           (when print?
             (logger seen))
-          (if (or (nil? count) (< seen count))
+          (if (and (or (nil? count) (< seen count))
+                   (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
             (if print?
-              (recur (trim-state new-state latest-ts) seen {:seen seen :ts now})
-              (recur new-state seen prev))
+              (recur (trim-state new-state latest-ts) first-ts seen {:seen seen :ts now})
+              (recur new-state first-ts seen prev))
             (logger seen)))
         (logger seen)))))
 
 (defn read-pcap-file
   "Loads pcap file into in-memory h2 database"
-  [file-name & {:keys [port verbose count]}]
+  [file-name & {:keys [port verbose count duration]}]
   (with-open [handle (file-handle file-name)]
-    (read-handle handle port verbose count)))
+    (read-handle handle port verbose count duration)))
 
 (defn read-net-interface
   "Captures packets from the interface and loads into the database"
-  [interface & {:keys [port verbose count]}]
+  [interface & {:keys [port verbose count duration]}]
   (with-open [handle (live-handle interface hbase-ports)]
     (log/info "Press enter key to stop capturing")
-    (let [f (future (read-handle handle port verbose count))]
-      (read-line)
+    (let [f (future (read-handle handle port verbose count duration))]
+      (if duration
+        (Thread/sleep (* 1000 duration))
+        (read-line))
       (log/info "Closing the handle")
       (future-cancel f)
       (try @f (catch CancellationException _)))
@@ -667,7 +680,7 @@ Options:
 (defn -main
   [& args]
   (let [{:keys [options arguments errors]} (parse-opts args cli-options)
-        {:keys [port verbose count interface help]} options]
+        {:keys [port verbose count duration interface help]} options]
     (cond
       help   (print-usage! 0)
       errors (print-usage! 1 (first errors))
@@ -680,10 +693,10 @@ Options:
       ;;; From files
       (doseq [file arguments]
         (log/info "Loading" file)
-        (read-pcap-file file :port port :verbose verbose :count count))
+        (read-pcap-file file :port port :verbose verbose :count count :duration duration))
       ;;; From a live capture
       (read-net-interface (or interface (select-nif) (System/exit 1))
-                          :port port :verbose verbose :count count))
+                          :port port :verbose verbose :count count :duration duration))
 
     (let [{:keys [server url]} (start-web-server)]
       (log/info "Started web server:" url)
