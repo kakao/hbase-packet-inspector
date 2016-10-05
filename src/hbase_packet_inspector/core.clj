@@ -21,7 +21,6 @@
                                                        ClientProtos$MutationProto
                                                        ClientProtos$RegionAction
                                                        ClientProtos$RegionActionResult
-                                                       ClientProtos$Result
                                                        ClientProtos$ResultOrException
                                                        ClientProtos$ScanRequest
                                                        ClientProtos$ScanResponse
