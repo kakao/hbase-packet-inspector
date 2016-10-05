@@ -134,9 +134,11 @@ Options:
   (defn create-db
     "Recreates database tables"
     []
-    (doseq [[table spec] schema]
-      (db-execute! (str "drop table if exists " (name table)))
-      (db-execute! (jdbc/create-table-ddl table spec))))
+    (doseq [[table spec] schema :let [table (name table)]]
+      (db-execute! (str "drop table if exists " table))
+      (db-execute! (jdbc/create-table-ddl table spec))
+      (db-execute! (format "create index %s_idx on %s (client, port, call_id)"
+                           table table))))
 
   ;;; PreparedStatements can be made only when the tables already exist
   (create-db)
