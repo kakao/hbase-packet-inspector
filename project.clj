@@ -1,5 +1,5 @@
-(defproject hbase-packet-inspector "0.1.0"
-  :description "hbase-packet-inspector analyzes packets to/from HBase region server"
+(defproject hbase-packet-inspector "0.1.1"
+  :description "Analyzes HBase region server packets"
   :url "http://github.com/kakao"
   :license {:name "Apache License 2.0"}
   :dependencies [[org.clojure/clojure "1.8.0"]

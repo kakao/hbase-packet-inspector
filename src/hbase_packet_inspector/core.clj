@@ -73,7 +73,7 @@ Options:
 
 (def state-expiration-ms
   "Any state object that stayed over this period will be expired"
-  12000)
+  120000)
 
 (def report-interval
   "Progress report interval"
@@ -465,15 +465,14 @@ Options:
   example, if a client sends a connection preamble with an invalid version
   number, the server will simply close the connection, the client will know,
   but we won't. A client can go missing before sending the full request, or it
-  can disappear without properly closing the open scanner.
+  can disappear without properly closing the open scanner. And we'll inevitably
+  end up with dangling state objects which will be periodically cleaned up by
+  trim-state.
 
   In short, it's not possible to reproduce the exact state between the server
   and the clients and that's not our goal here. We will not try to keep track
-  of the states that are not essential to the workload, e.g. initial connetion
-  handshake.
-
-  However, we'll inevitably end up with dangling state objects that has to be
-  cleaned up if we're going to run this program as a long-running process."
+  of the states that are not essential to the workload, such as initial
+  connetion handshake."
 
   [^Packet packet ports timestamp state proc-fn]
   {:pre [(set? ports)]}
