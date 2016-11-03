@@ -89,33 +89,33 @@ Options:
 (def schema
   "Database schema"
   (let [schema {:requests [[:ts         "timestamp"]
-                           [:client     "varchar(15)"]
+                           [:client     "varchar"]
                            [:port       "int"]
                            [:call_id    "int"]
-                           [:server     "varchar(15)"]
-                           [:type       "varchar(30)"]
+                           [:server     "varchar"]
+                           [:type       "varchar"]
                            [:size       "int"]
                            [:batch      "int"]
-                           [:table      "varchar(100)"]
-                           [:region     "varchar(1000)"]
-                           [:row        "varchar(1000)"]
-                           [:stoprow    "varchar(1000)"]
+                           [:table      "varchar"]
+                           [:region     "varchar"]
+                           [:row        "varchar"]
+                           [:stoprow    "varchar"]
                            [:cells      "int"]
-                           [:durability "varchar(20)"]]
-                :actions  [[:client     "varchar(15)"]
+                           [:durability "varchar"]]
+                :actions  [[:client     "varchar"]
                            [:port       "int"]
                            [:call_id    "int"]
-                           [:type       "varchar(30)"]
-                           [:table      "varchar(100)"]
-                           [:region     "varchar(1000)"]
-                           [:row        "varchar(1000)"]
+                           [:type       "varchar"]
+                           [:table      "varchar"]
+                           [:region     "varchar"]
+                           [:row        "varchar"]
                            [:cells      "int"]
-                           [:durability "varchar(20)"]]}]
+                           [:durability "varchar"]]}]
     (assoc schema
            :responses
-           (conj (:requests schema) [:error "varchar(300)"] [:elapsed "int"])
+           (conj (:requests schema) [:error "varchar"] [:elapsed "int"])
            :results
-           (conj (:actions schema)  [:error "varchar(300)"]))))
+           (conj (:actions schema)  [:error "varchar"]))))
 
 (defn db-execute!
   "Executes SQL with the database"
