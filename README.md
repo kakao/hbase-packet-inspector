@@ -29,6 +29,9 @@ Options:
 tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
 ./hbase-packet-inspector dump.pcap
 
+# Use readline wrapper
+rlwrap ./hbase-packet-inspector dump.pcap
+
 # Reading from a live capture; captures the packets until you press enter
 sudo ./hbase-packet-inspector
 ```
