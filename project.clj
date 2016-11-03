@@ -1,4 +1,4 @@
-(defproject hbase-packet-inspector "0.1.1"
+(defproject hbase-packet-inspector "0.1.2"
   :description "Analyzes HBase region server packets"
   :url "http://github.com/kakao"
   :license {:name "Apache License 2.0"}
