@@ -13,6 +13,7 @@
            (java.util.concurrent CancellationException TimeoutException)
            (org.apache.hadoop.hbase HRegionInfo)
            (org.apache.hadoop.hbase.protobuf.generated ClientProtos$Action
+                                                       ClientProtos$Column
                                                        ClientProtos$GetRequest
                                                        ClientProtos$GetResponse
                                                        ClientProtos$MultiRequest
@@ -224,8 +225,13 @@ Options:
 (defn parse-get-request
   "Parses GetRequest"
   [^ClientProtos$GetRequest request]
-  (assoc (parse-region-name (.. request getRegion getValue))
-         :row (->string-binary (.. request getGet getRow))))
+  (let [get (.. request getGet)
+        families (.. get getColumnList)
+        all-qualifiers (reduce + (for [^ClientProtos$Column family families]
+                                   (.. family getQualifierCount)))]
+    (assoc (parse-region-name (.. request getRegion getValue))
+           :row (->string-binary (.. get getRow))
+           :cells all-qualifiers)))
 
 (defn parse-scan-request
   "Parses ScanRequest. :method in the returned map can be one of the followings:
