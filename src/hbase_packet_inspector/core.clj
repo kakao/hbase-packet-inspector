@@ -83,9 +83,9 @@ Options:
 
 (defonce ^{:doc "In-memory h2 database"} db-connection
   (jdbc/get-connection
-    {:classname   "org.h2.Driver"
-     :subprotocol "h2:mem"
-     :subname     "hbase;DB_CLOSE_DELAY=-1;LOG=0;UNDO_LOG=0;LOCK_MODE=0"}))
+   {:classname   "org.h2.Driver"
+    :subprotocol "h2:mem"
+    :subname     "hbase;DB_CLOSE_DELAY=-1;LOG=0;UNDO_LOG=0;LOCK_MODE=0"}))
 
 (def schema
   "Database schema"
@@ -147,10 +147,10 @@ Options:
         (into {} (for [[table columns] fields]
                    [table
                     (jdbc/prepare-statement
-                      db-connection
-                      (format "insert into %s values(%s)"
-                              (name table)
-                              (str/join ", " (repeat (count columns) "?"))))]))]
+                     db-connection
+                     (format "insert into %s values(%s)"
+                             (name table)
+                             (str/join ", " (repeat (count columns) "?"))))]))]
     (defn db-insert-pstmt!
       "Inserts a row into the table using PreparedStatement"
       [table values]
@@ -287,11 +287,11 @@ Options:
           ^ClientProtos$Action action (.. region-action getActionList)
           :let [region (parse-region-name (.. region-action getRegion getValue))]]
       (merge
-        (if (.hasGet action)
-          {:method :get
-           :row    (->string-binary (.. action getGet getRow))}
-          (parse-mutation (.. action getMutation)))
-        region))))
+       (if (.hasGet action)
+         {:method :get
+          :row    (->string-binary (.. action getGet getRow))}
+         (parse-mutation (.. action getMutation)))
+       region))))
 
 (defn parse-request
   "Processes request from client"
@@ -305,28 +305,28 @@ Options:
                      (.getRequestParam header))
         base    {:method method :call-id call-id}]
     (merge
-      base
-      (when params?
-        (case method
-          :get
-          (let [request (ClientProtos$GetRequest/parseDelimitedFrom bais)]
-            (parse-get-request request))
+     base
+     (when params?
+       (case method
+         :get
+         (let [request (ClientProtos$GetRequest/parseDelimitedFrom bais)]
+           (parse-get-request request))
 
-          :scan
-          (let [request (ClientProtos$ScanRequest/parseDelimitedFrom bais)]
-            (parse-scan-request request))
+         :scan
+         (let [request (ClientProtos$ScanRequest/parseDelimitedFrom bais)]
+           (parse-scan-request request))
 
-          :mutate
-          (let [request (ClientProtos$MutateRequest/parseDelimitedFrom bais)]
-            (parse-mutate-request request))
+         :mutate
+         (let [request (ClientProtos$MutateRequest/parseDelimitedFrom bais)]
+           (parse-mutate-request request))
 
-          :multi
-          (let [request (ClientProtos$MultiRequest/parseDelimitedFrom bais)
-                actions (parse-multi-request request)
-                table   (some-> (filter :table actions) first :table)]
-            {:table   table
-             :actions actions})
-          {})))))
+         :multi
+         (let [request (ClientProtos$MultiRequest/parseDelimitedFrom bais)
+               actions (parse-multi-request request)
+               table   (some-> (filter :table actions) first :table)]
+           {:table   table
+            :actions actions})
+         {})))))
 
 (defn parse-scan-response
   "Parses ScanResponses to extract the total number of cells"
@@ -368,22 +368,22 @@ Options:
                       (when error?
                         [:error (.. header getException getExceptionClassName)]))]
     (merge
-      request ; can be nil, but it's okay
-      base
-      (match [method]
-        [(:or :open-scanner :next-rows :close-scanner)]
-        (let [response (ClientProtos$ScanResponse/parseDelimitedFrom bais)]
-          (parse-scan-response response))
+     request ; can be nil, but it's okay
+     base
+     (match [method]
+       [(:or :open-scanner :next-rows :close-scanner)]
+       (let [response (ClientProtos$ScanResponse/parseDelimitedFrom bais)]
+         (parse-scan-response response))
 
-        [:get]
-        (let [response (ClientProtos$GetResponse/parseDelimitedFrom bais)]
-          (parse-get-response response))
+       [:get]
+       (let [response (ClientProtos$GetResponse/parseDelimitedFrom bais)]
+         (parse-get-response response))
 
-        [:multi]
-        (let [response (ClientProtos$MultiResponse/parseDelimitedFrom bais)]
-          (parse-multi-response response (:actions request)))
+       [:multi]
+       (let [response (ClientProtos$MultiResponse/parseDelimitedFrom bais)]
+         (parse-multi-response response (:actions request)))
 
-        [_] nil))))
+       [_] nil))))
 
 (defn parse-stream
   "Processes the byte stream and returns the map representation of request or
@@ -498,10 +498,10 @@ Options:
                        (let [info (merge parsed base-map) ; mind the order
                              {:keys [call-id]} info
                              info (or (some->
-                                        (when-not inbound? (request-fn call-id))
-                                        :ts
-                                        (some->> (sub-ts timestamp)
-                                                 (assoc info :elapsed)))
+                                       (when-not inbound? (request-fn call-id))
+                                       :ts
+                                       (some->> (sub-ts timestamp)
+                                                (assoc info :elapsed)))
                                       info)
                              [state info] (process-scan-state state client info)]
                          (proc-fn info)
@@ -559,7 +559,7 @@ Options:
         info   (assoc info
                       :batch batch
                       :cells (or cells
-                               (reduce + (remove nil? (map :cells actions)))))]
+                                 (reduce + (remove nil? (map :cells actions)))))]
     (when verbose
       (log/info info))
     (when multi?
@@ -616,7 +616,7 @@ Options:
         (let [latest-ts (.getTimestamp handle)
               first-ts  (or first-ts latest-ts)
               new-state (process-hbase-packet
-                          packet ports latest-ts state #(db-insert! % verbose))
+                         packet ports latest-ts state #(db-insert! % verbose))
               now       (System/currentTimeMillis)
               seen      (inc seen)
               tdiff     (- now  (:ts   prev))
