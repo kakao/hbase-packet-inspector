@@ -16,11 +16,17 @@ Usage:
 
 Options:
   -h --help                 Show this message
+  -i --interface=INTERFACE  Network interface to monitor
   -p --port=PORT            Port to monitor (default: 16020 and 60020)
   -c --count=COUNT          Maximum number of packets to process
-  -i --interface=INTERFACE  Network interface to monitor
+  -d --duration=DURATION    Number of seconds to capture packets
+  -k --kafka=SERVERS/TOPIC  Kafka bootstrap servers and the name of the topic
   -v --verbose              Verbose output
 ```
+
+If `--kafka` option is used, hbase-packet-inspector will send records for
+`responses` table to the specified Kafka cluster as flat json records, instead
+of creating in-memory database.
 
 ## Example
 
@@ -53,6 +59,8 @@ Note that `call_id` is not globally unique nor monotonically increasing. Join
 between the tables should be performed on (`client`, `port`, `call_id`)
 columns.
 
+Currently, only records for `responses` table can be sent to Kafka.
+
 ## Build
 
 ```sh
@@ -64,7 +72,7 @@ lein bin
 
 This software is licensed under the [Apache 2 license](LICENSE.txt), quoted below.
 
-Copyright 2016 Kakao Corp. <http://www.kakaocorp.com>
+Copyright 2017 Kakao Corp. <http://www.kakaocorp.com>
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not
 use this project except in compliance with the License. You may obtain a copy

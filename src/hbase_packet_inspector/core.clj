@@ -1,15 +1,16 @@
 (ns hbase-packet-inspector.core
   (:require [clojure.core.match :refer [match]]
-            [clojure.java.jdbc :as jdbc]
             [clojure.string :as str]
             [clojure.tools.cli :refer [parse-opts]]
-            [clojure.tools.logging :as log])
+            [clojure.tools.logging :as log]
+            [hbase-packet-inspector.db :as db]
+            [hbase-packet-inspector.kafka :as kafka])
   (:import (com.google.common.io ByteStreams)
            (com.google.protobuf InvalidProtocolBufferException
                                 LiteralByteString)
            (java.io ByteArrayInputStream ByteArrayOutputStream DataInputStream
                     EOFException)
-           (java.sql PreparedStatement Statement Timestamp)
+           (java.sql Timestamp)
            (java.util.concurrent CancellationException TimeoutException)
            (org.apache.hadoop.hbase HRegionInfo)
            (org.apache.hadoop.hbase.protobuf.generated ClientProtos$Action
@@ -28,8 +29,6 @@
                                                        RPCProtos$RequestHeader
                                                        RPCProtos$ResponseHeader)
            (org.apache.hadoop.hbase.util Bytes)
-           (org.h2.server.web WebServer)
-           (org.h2.tools Server Shell)
            (org.pcap4j.core BpfProgram$BpfCompileMode PcapHandle
                             PcapHandle$Builder
                             PcapNetworkInterface$PromiscuousMode Pcaps)
@@ -50,6 +49,7 @@ Options:
   -p --port=PORT            Port to monitor (default: 16020 and 60020)
   -c --count=COUNT          Maximum number of packets to process
   -d --duration=DURATION    Number of seconds to capture packets
+  -k --kafka=SERVERS/TOPIC  Kafka bootstrap servers and the name of the topic
   -v --verbose              Verbose output")
 
 (def cli-options
@@ -63,6 +63,8 @@ Options:
     :parse-fn #(Integer/parseInt %)
     :validate [pos? "Must be a positive integer"]]
    ["-i" "--interface=INTERFACE"
+    :validate [seq "Must be a non-empty string"]]
+   ["-k" "--kafka=SERVERS/TOPIC"
     :validate [seq "Must be a non-empty string"]]
    ["-h" "--help"]
    ["-v" "--verbose"
@@ -80,88 +82,6 @@ Options:
   "Progress report interval"
   {:count 10000
    :ms    2000})
-
-(defonce ^{:doc "In-memory h2 database"} db-connection
-  (jdbc/get-connection
-   {:classname   "org.h2.Driver"
-    :subprotocol "h2:mem"
-    :subname     "hbase;DB_CLOSE_DELAY=-1;LOG=0;UNDO_LOG=0;LOCK_MODE=0"}))
-
-(def schema
-  "Database schema"
-  (let [schema {:requests [[:ts         "timestamp"]
-                           [:client     "varchar"]
-                           [:port       "int"]
-                           [:call_id    "int"]
-                           [:server     "varchar"]
-                           [:type       "varchar"]
-                           [:size       "int"]
-                           [:batch      "int"]
-                           [:table      "varchar"]
-                           [:region     "varchar"]
-                           [:row        "varchar"]
-                           [:stoprow    "varchar"]
-                           [:cells      "int"]
-                           [:durability "varchar"]]
-                :actions  [[:client     "varchar"]
-                           [:port       "int"]
-                           [:call_id    "int"]
-                           [:type       "varchar"]
-                           [:table      "varchar"]
-                           [:region     "varchar"]
-                           [:row        "varchar"]
-                           [:cells      "int"]
-                           [:durability "varchar"]]}]
-    (assoc schema
-           :responses
-           (conj (:requests schema) [:error "varchar"] [:elapsed "int"])
-           :results
-           (conj (:actions schema)  [:error "varchar"]))))
-
-(defn db-execute!
-  "Executes SQL with the database"
-  [sql]
-  (with-open [^Statement stmt (-> db-connection .createStatement)]
-    (.execute stmt sql)))
-
-(let [fields (into {} (for [[table specs] schema]
-                        [table (mapv #(-> % first name
-                                          (str/replace "_" "-")
-                                          (str/replace "type" "method")
-                                          keyword) specs)]))
-      fields-with-index (into {} (for [[table columns] fields]
-                                   [table (map vector (iterate inc 1) columns)]))]
-  (defn create-db
-    "Recreates database tables"
-    []
-    (doseq [[table spec] schema :let [table (name table)]]
-      (db-execute! (str "drop table if exists " table))
-      (db-execute! (jdbc/create-table-ddl table spec))
-      (db-execute! (format "create index %s_idx on %s (client, port, call_id)"
-                           table table))))
-
-  ;;; PreparedStatements can be made only when the tables already exist
-  (create-db)
-
-  (let [pstmts
-        (into {} (for [[table columns] fields]
-                   [table
-                    (jdbc/prepare-statement
-                     db-connection
-                     (format "insert into %s values(%s)"
-                             (name table)
-                             (str/join ", " (repeat (count columns) "?"))))]))]
-    (defn db-insert-pstmt!
-      "Inserts a row into the table using PreparedStatement"
-      [table values]
-      (let [pstmt ^PreparedStatement (pstmts table)]
-        (doseq [[idx col] (fields-with-index table)
-                :let [val (col values)]]
-          (cond
-            (nil? val)     (.setNull   pstmt idx java.sql.Types/NULL)
-            (keyword? val) (.setObject pstmt idx (name val))
-            :else          (.setObject pstmt idx val)))
-        (.execute pstmt)))))
 
 (defn packet->map
   "Returns essential information from the given packet as a map"
@@ -548,9 +468,9 @@ Options:
           ;;; Discard byte stream for the client
           (dissoc state [:client client]))))))
 
-(defn db-insert!
+(defn send!
   "Inserts request/response information into h2 database tables"
-  [info verbose]
+  [insert info verbose]
   (let [{:keys [inbound? actions client port call-id cells]} info
         batch  (count actions)
         multi? (> batch 1)
@@ -564,12 +484,12 @@ Options:
       (log/info info))
     (when multi?
       (doseq [action actions]
-        (db-insert-pstmt! (if inbound? :actions :results)
-                          (assoc action
-                                 :client  client
-                                 :port    port
-                                 :call-id call-id))))
-    (db-insert-pstmt! table info)))
+        (insert (if inbound? :actions :results)
+                (assoc action
+                       :client  client
+                       :port    port
+                       :call-id call-id))))
+    (insert table info)))
 
 (defn get-next-packet
   "Retrieves the next packet from the handle. getNextPacketEx can throw
@@ -602,7 +522,7 @@ Options:
 
 (defn read-handle
   "Reads packets from the handle"
-  [^PcapHandle handle port verbose count duration]
+  [^PcapHandle handle port verbose count duration sink]
   {:pre [(or (nil? count) (pos? count))]}
   (let [logger   #(log/infof "Processed %d packet(s)" %)
         duration (some-> duration (* 1000))
@@ -616,7 +536,7 @@ Options:
         (let [latest-ts (.getTimestamp handle)
               first-ts  (or first-ts latest-ts)
               new-state (process-hbase-packet
-                         packet ports latest-ts state #(db-insert! % verbose))
+                         packet ports latest-ts state #(send! sink % verbose))
               now       (System/currentTimeMillis)
               seen      (inc seen)
               tdiff     (- now  (:ts   prev))
@@ -635,16 +555,16 @@ Options:
 
 (defn read-pcap-file
   "Loads pcap file into in-memory h2 database"
-  [file-name & {:keys [port verbose count duration]}]
+  [file-name sink & {:keys [port verbose count duration]}]
   (with-open [handle (file-handle file-name)]
-    (read-handle handle port verbose count duration)))
+    (read-handle handle port verbose count duration sink)))
 
 (defn read-net-interface
   "Captures packets from the interface and loads into the database"
-  [interface & {:keys [port verbose count duration]}]
+  [interface sink & {:keys [port verbose count duration]}]
   (with-open [handle (live-handle interface hbase-ports)]
     (log/info "Press enter key to stop capturing")
-    (let [f (future (read-handle handle port verbose count duration))]
+    (let [f (future (read-handle handle port verbose count duration sink))]
       (if duration
         (Thread/sleep (* 1000 duration))
         (read-line))
@@ -661,21 +581,8 @@ Options:
   []
   (some-> (NifSelector.) .selectNetworkInterface .getName))
 
-(defn start-shell
-  "Starts interactive command-line SQL client"
-  []
-  (.runTool (Shell.) db-connection (make-array String 0)))
-
-(defn start-web-server
-  "Starts web server for h2 database"
-  []
-  (let [ws (WebServer.)
-        s  (doto (Server. ws (into-array String ["-webPort" "0" "-webAllowOthers"]))
-             .start)
-        url (.addSession ws db-connection)]
-    {:server s :url url}))
-
 (defn- print-usage!
+  "Prints usage and terminates the program"
   ([status extra]
    (println extra)
    (print-usage! status))
@@ -683,29 +590,48 @@ Options:
    (println usage)
    (System/exit status)))
 
+(defn ->kafka
+  "Parses --kafka option and executes process function with Kafka sink"
+  [servers-spec process]
+  (let [[servers topic] (str/split servers-spec #"/" 2)]
+    (when-not (seq topic)
+      (throw (IllegalArgumentException. "Invalid topic name")))
+    (log/info "Creating Kafka producer")
+    (let [[send close] (kafka/send-and-close-fn servers topic)]
+      (process send)
+      (close))))
+
+(defn ->db
+  "Executes process function with in-memory DB sink"
+  [process]
+  (let [connection (db/connect)]
+    (log/info "Creating database schema")
+    (db/create connection)
+    (process (db/prepared-insert-fn connection))
+    (let [{:keys [server url]} (db/start-web-server connection)]
+      (log/info "Started web server:" url)
+      (db/start-shell connection)
+      (.stop server))))
+
 (defn -main
   [& args]
   (let [{:keys [options arguments errors]} (parse-opts args cli-options)
-        {:keys [port verbose count duration interface help]} options]
+        {:keys [port verbose count duration interface kafka help]} options]
     (cond
       help   (print-usage! 0)
       errors (print-usage! 1 (first errors))
       (and interface (seq arguments)) (print-usage! 1))
 
-    (log/info "Creating database schema")
-    (create-db)
-
-    (if (seq arguments)
-      ;;; From files
-      (doseq [file arguments]
-        (log/info "Loading" file)
-        (read-pcap-file file :port port :verbose verbose :count count :duration duration))
-      ;;; From a live capture
-      (read-net-interface (or interface (select-nif) (System/exit 1))
-                          :port port :verbose verbose :count count :duration duration))
-
-    (let [{:keys [server url]} (start-web-server)]
-      (log/info "Started web server:" url)
-      (start-shell)
-      (.stop server)
-      (shutdown-agents))))
+    (let [options [:port port :verbose verbose :count count :duration duration]
+          process (if (seq arguments)
+                    ;; From files
+                    #(doseq [file arguments]
+                       (log/info "Loading" file)
+                       (apply read-pcap-file file % options))
+                    ;; From a live capture
+                    #(apply read-net-interface
+                            (or interface (select-nif) (System/exit 1)) %
+                            options))]
+      (if kafka
+        (->kafka kafka process)
+        (->db process)))))
