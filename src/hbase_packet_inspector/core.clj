@@ -330,7 +330,7 @@ Options:
   fail-safe and we may run into an exception later when we try to parse the
   packet."
   [len]
-  (and (pos? len) (< len (* 1024 1024 1024))))
+  (and (pos? len) (< len (Math/pow 1024 3))))
 
 (defn process-scan-state
   "Manages state transition during Scan lifecycle"
@@ -507,7 +507,7 @@ Options:
         (recur)
         result))))
 
-(defn trim-state
+(defn trim-state-expired
   "Removes state objects that are not handled correctly within the period"
   [state latest-ts]
   (let [new-state (->> state
@@ -519,6 +519,48 @@ Options:
     (when (pos? xcount)
       (log/infof "Expired %d state object(s)" xcount))
     new-state))
+
+(defn expected-memory-usage
+  "Memory needed to parse the object"
+  ^long [[_ state-props]]
+  (let [{:keys [out remains] :or {remains 0}} state-props]
+    (+ remains (if out
+                 (.size ^ByteArrayOutputStream out)
+                 0))))
+
+(defn fmt-bytes
+  [bytes]
+  (cond
+    (< bytes (Math/pow 1024 1)) (str bytes " B")
+    (< bytes (Math/pow 1024 2)) (format "%.02f KiB" (/ bytes (Math/pow 1024 1)))
+    (< bytes (Math/pow 1024 3)) (format "%.02f MiB" (/ bytes (Math/pow 1024 2)))
+    :else                       (format "%.02f GiB" (/ bytes (Math/pow 1024 3)))))
+
+(defn trim-state-by-memory
+  "Makes sure that the state objects do not occupy more than 50% of the total
+  available memory."
+  [state]
+  (let [memory-max   (.. Runtime getRuntime maxMemory)
+        memory-used  (reduce + (map expected-memory-usage state))
+        memory-limit (quot memory-max 2)]
+    (if (< memory-used memory-limit)
+      state
+      (loop [entries   []
+             remaining (sort-by expected-memory-usage state)
+             num-bytes 0]
+        (let [[entry & remaining] remaining
+              num-bytes (+ num-bytes (expected-memory-usage entry))]
+          (if (and (seq remaining) (< num-bytes memory-limit))
+            (recur (conj entries entry) remaining num-bytes)
+            (let [dropped (- (count state) (count entries))]
+              (when (pos? dropped)
+                (log/infof "%d object(s) dropped due to memory limit: %s -> %s"
+                           dropped
+                           (fmt-bytes memory-used)
+                           (fmt-bytes num-bytes)))
+              (into {} entries))))))))
+
+(def trim-state (comp trim-state-by-memory trim-state-expired))
 
 (defn read-handle
   "Reads packets from the handle"
@@ -634,4 +676,6 @@ Options:
                             options))]
       (if kafka
         (->kafka kafka process)
-        (->db process)))))
+        (->db process)))
+
+    (shutdown-agents)))
