@@ -10,6 +10,8 @@
   [bootstrap-servers]
   {ProducerConfig/BOOTSTRAP_SERVERS_CONFIG
    bootstrap-servers
+   ProducerConfig/COMPRESSION_TYPE_CONFIG
+   "gzip"
    ProducerConfig/KEY_SERIALIZER_CLASS_CONFIG
    "org.apache.kafka.common.serialization.StringSerializer"
    ProducerConfig/VALUE_SERIALIZER_CLASS_CONFIG
