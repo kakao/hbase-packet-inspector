@@ -330,7 +330,7 @@ Options:
   fail-safe and we may run into an exception later when we try to parse the
   packet."
   [len]
-  (and (pos? len) (< len (Math/pow 1024 3))))
+  (and (pos? len) (< len (* 256 1024 1024))))
 
 (defn process-scan-state
   "Manages state transition during Scan lifecycle"
