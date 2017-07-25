@@ -36,6 +36,10 @@
            (org.pcap4j.util NifSelector))
   (:gen-class))
 
+(def tty?
+  "True if stdin is a tty device"
+  (some? (System/console)))
+
 (def usage
   "hbase-packet-inspector
 
@@ -621,6 +625,9 @@ Options:
 (defn select-nif
   "Interactive network interface selector. Returns nil if user enters 'q'."
   []
+  (when-not tty?
+    (throw (IllegalArgumentException.
+            "Cannot select device as stdin is not tty. Use --interface option.")))
   (some-> (NifSelector.) .selectNetworkInterface .getName))
 
 (defn- print-usage!
@@ -663,6 +670,10 @@ Options:
       help   (print-usage! 0)
       errors (print-usage! 1 (first errors))
       (and interface (seq arguments)) (print-usage! 1))
+
+    (when-not (or kafka tty? count duration)
+      (throw (IllegalArgumentException.
+              "Cannot load data into in-memory database indefinitely")))
 
     (let [options [:port port :verbose verbose :count count :duration duration]
           process (if (seq arguments)
