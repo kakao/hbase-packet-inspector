@@ -609,11 +609,11 @@ Options:
   "Captures packets from the interface and loads into the database"
   [interface sink & {:keys [port verbose count duration]}]
   (with-open [handle (live-handle interface hbase-ports)]
-    (log/info "Press enter key to stop capturing")
+    (when tty? (log/info "Press enter key to stop capturing"))
     (let [f (future (read-handle handle port verbose count duration sink))]
       (if duration
         (Thread/sleep (* 1000 duration))
-        (read-line))
+        (if tty? (read-line) (deref f)))
       (log/info "Closing the handle")
       (future-cancel f)
       (try @f (catch CancellationException _)))
