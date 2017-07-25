@@ -17,6 +17,7 @@
                  [com.h2database/h2 "1.4.196"]
                  [org.apache.kafka/kafka-clients "0.11.0.0"]
                  [cheshire "5.7.1"]
+                 [com.cemerick/url "0.1.1"]
                  [junegunn/grouper "0.1.0"]]
   :plugins [[lein-bin "0.3.5"]]
   :bin {:bin-path "target"}

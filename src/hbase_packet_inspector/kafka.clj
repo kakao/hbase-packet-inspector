@@ -41,7 +41,7 @@
 (defn send-and-close-fn
   "Returns two functions; one for sending records to Kafka as flat json format
   records, and another for closing the batch pool and Kafka producer."
-  [bootstrap-servers topic]
+  [bootstrap-servers topic & [extra-pairs]]
   (let [producer   (create-producer bootstrap-servers)
         hostname   (.. java.net.InetAddress getLocalHost getHostName)
         batch-pool (grouper/start!
@@ -50,9 +50,10 @@
                         (.send producer
                                (make-record
                                 topic
-                                (assoc item
-                                       :hostname hostname
-                                       :ts (.getTime ^java.sql.Timestamp (:ts item)))))))
+                                (merge (assoc item
+                                              :hostname hostname
+                                              :ts (.getTime ^java.sql.Timestamp (:ts item)))
+                                       extra-pairs)))))
                     :capacity 1000
                     :interval 200
                     :pool 2)]

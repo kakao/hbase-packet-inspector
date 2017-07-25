@@ -28,6 +28,12 @@ If `--kafka` option is used, hbase-packet-inspector will send records for
 `responses` table to the specified Kafka cluster as flat json records, instead
 of creating in-memory database.
 
+You can send additional key-value pairs to Kafka as follows:
+
+```sh
+--kafka "bootstrap1:9092,bootstrap2:9092/hbase-packets?service=twitter&cluster=feed"
+```
+
 ## Example
 
 ```sh

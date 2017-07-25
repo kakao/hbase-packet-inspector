@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [clojure.tools.cli :refer [parse-opts]]
             [clojure.tools.logging :as log]
+            [cemerick.url :refer [query->map]]
             [hbase-packet-inspector.db :as db]
             [hbase-packet-inspector.kafka :as kafka])
   (:import (com.google.common.io ByteStreams)
@@ -642,11 +643,13 @@ Options:
 (defn ->kafka
   "Parses --kafka option and executes process function with Kafka sink"
   [servers-spec process]
-  (let [[servers topic] (str/split servers-spec #"/" 2)]
+  (let [[servers topic] (str/split servers-spec #"/" 2)
+        [topic query] (str/split topic #"\?" 2)
+        extra-pairs (query->map query)]
     (when-not (seq topic)
       (throw (IllegalArgumentException. "Invalid topic name")))
     (log/info "Creating Kafka producer")
-    (let [[send close] (kafka/send-and-close-fn servers topic)]
+    (let [[send close] (kafka/send-and-close-fn servers topic extra-pairs)]
       (process send)
       (close))))
 
