@@ -554,9 +554,9 @@ Options:
              remaining (sort-by expected-memory-usage state)
              num-bytes 0]
         (let [[entry & remaining] remaining
-              num-bytes (+ num-bytes (expected-memory-usage entry))]
-          (if (and (seq remaining) (< num-bytes memory-limit))
-            (recur (conj entries entry) remaining num-bytes)
+              num-bytes+ (+ num-bytes (expected-memory-usage entry))]
+          (if (and (seq remaining) (< num-bytes+ memory-limit))
+            (recur (conj entries entry) remaining num-bytes+)
             (let [dropped (- (count state) (count entries))]
               (when (pos? dropped)
                 (log/infof "%d object(s) dropped due to memory limit: %s -> %s"
