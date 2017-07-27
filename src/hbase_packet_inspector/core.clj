@@ -16,6 +16,7 @@
            (org.apache.hadoop.hbase HRegionInfo)
            (org.apache.hadoop.hbase.protobuf.generated ClientProtos$Action
                                                        ClientProtos$Column
+                                                       ClientProtos$BulkLoadHFileRequest
                                                        ClientProtos$GetRequest
                                                        ClientProtos$GetResponse
                                                        ClientProtos$MultiRequest
@@ -218,6 +219,11 @@ Options:
          (parse-mutation (.. action getMutation)))
        region))))
 
+(defn parse-bulk-load-hfile-request
+  "Parses BulkLoadHFileRequest"
+  [^ClientProtos$BulkLoadHFileRequest request]
+  (parse-region-name (.. request getRegion getValue)))
+
 (defn parse-request
   "Processes request from client"
   [^RPCProtos$RequestHeader header bais]
@@ -251,6 +257,10 @@ Options:
                table   (some-> (filter :table actions) first :table)]
            {:table   table
             :actions actions})
+
+         :bulk-load-hfile
+         (let [request (ClientProtos$BulkLoadHFileRequest/parseDelimitedFrom bais)]
+           (parse-bulk-load-hfile-request request))
          {})))))
 
 (defn parse-scan-response
