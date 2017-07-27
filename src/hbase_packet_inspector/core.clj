@@ -348,7 +348,8 @@ Options:
   (and (pos? len) (< len (* 256 1024 1024))))
 
 (defn process-scan-state
-  "Manages state transition during Scan lifecycle"
+  "Manages state transition during Scan lifecycle. Returns the pair of new
+  state map and the augmented parsed info."
   [state client parsed]
   (let [{:keys [method inbound? call-id scanner ts]} parsed
         region-info (select-keys (state [:scanner scanner]) [:table :region])]
@@ -374,7 +375,7 @@ Options:
 
       ;;; 4. Discard Scan request from the state
       [:close-scanner true]
-      [(dissoc state [:scanner scanner]) parsed]
+      [(dissoc state [:scanner scanner]) (merge parsed region-info)]
 
       ;;; State transition is simpler for small scans
       [:small-scan false]
