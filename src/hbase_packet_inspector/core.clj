@@ -518,7 +518,9 @@ Options:
                    (catch TimeoutException _
                      (Thread/sleep 100) ; needed for future-cancel
                      ::retry)
-                   (catch java.io.EOFException _ nil))]
+                   (catch java.io.EOFException e
+                     (log/info e)
+                     nil))]
       (if (= result ::retry)
         (recur)
         result))))
