@@ -655,7 +655,7 @@ Options:
   "Parses --kafka option and executes process function with Kafka sink"
   [servers-spec process]
   (let [[servers topic] (str/split servers-spec #"/" 2)
-        [topic query] (str/split topic #"\?" 2)
+        [topic query] (str/split (or topic "") #"\?" 2)
         extra-pairs (query->map query)]
     (when-not (seq topic)
       (throw (IllegalArgumentException. "Invalid topic name")))
