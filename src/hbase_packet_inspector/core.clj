@@ -480,7 +480,7 @@ Options:
                 (next-state (parse-stream inbound? bais total request-fn))))))
         (catch Exception e
           (when-not (instance? InvalidProtocolBufferException e)
-            (log/warn (.getMessage e)))
+            (log/warn e))
           ;;; Discard byte stream for the client
           (dissoc state [:client client]))))))
 
@@ -518,9 +518,7 @@ Options:
                    (catch TimeoutException _
                      (Thread/sleep 100) ; needed for future-cancel
                      ::retry)
-                   (catch java.io.EOFException e
-                     (log/info e)
-                     nil))]
+                   (catch java.io.EOFException _ nil))]
       (if (= result ::retry)
         (recur)
         result))))
@@ -592,7 +590,9 @@ Options:
            seen     0
            prev     {:seen 0 :ts (System/currentTimeMillis)}]
       (if-let [packet (try (get-next-packet handle)
-                           (catch InterruptedException _ nil))]
+                           (catch InterruptedException e
+                             (log/warn e)
+                             nil))]
         (let [latest-ts (.getTimestamp handle)
               first-ts  (or first-ts latest-ts)
               new-state (process-hbase-packet
@@ -630,7 +630,9 @@ Options:
         (if tty? (read-line) (deref f)))
       (log/info "Closing the handle")
       (future-cancel f)
-      (try @f (catch CancellationException _)))
+      (try @f
+           (catch CancellationException e
+             (log/warn e))))
     (let [stats (.getStats handle)]
       (log/infof "%d packet(s) received, %d dropped"
                  (.getNumPacketsReceived stats)
@@ -664,6 +666,7 @@ Options:
     (log/info "Creating Kafka producer")
     (let [[send close] (kafka/send-and-close-fn servers topic extra-pairs)]
       (process send)
+      (log/info "Closing Kafka producer")
       (close))))
 
 (defn ->db
@@ -701,8 +704,11 @@ Options:
                     #(apply read-net-interface
                             (or interface (select-nif) (System/exit 1)) %
                             options))]
-      (if kafka
-        (->kafka kafka process)
-        (->db process)))
+      (try
+        (if kafka
+          (->kafka kafka process)
+          (->db process))
+        (catch Exception e
+          (log/warn e))))
 
     (shutdown-agents)))
