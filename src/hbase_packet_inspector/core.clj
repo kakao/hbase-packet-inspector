@@ -104,9 +104,9 @@ Options:
        :length (and data (.. data length))
        :data   (and data (.. data getRawData))})))
 
-(defn ^PcapHandle live-handle
+(defn live-handle
   "Opens PcapHandle for the interface"
-  [interface ports]
+  ^PcapHandle [interface ports]
   (let [handle (.. (PcapHandle$Builder. interface)
                    (snaplen (* 1024 64))
                    (promiscuousMode PcapNetworkInterface$PromiscuousMode/NONPROMISCUOUS)
@@ -117,9 +117,9 @@ Options:
                 BpfProgram$BpfCompileMode/OPTIMIZE)
     handle))
 
-(defn ^PcapHandle file-handle
+(defn file-handle
   "Opens PcapHandle from the existing file or from STDIN if path is -"
-  [path]
+  ^PcapHandle [path]
   (Pcaps/openOffline path))
 
 (defn ->string-binary
