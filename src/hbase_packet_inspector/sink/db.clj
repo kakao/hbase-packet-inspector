@@ -1,4 +1,4 @@
-(ns hbase-packet-inspector.db
+(ns hbase-packet-inspector.sink.db
   (:require [clojure.java.jdbc :as jdbc]
             [clojure.string :as str])
   (:import (java.sql Connection PreparedStatement Statement)

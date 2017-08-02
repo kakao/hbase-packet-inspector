@@ -1,41 +1,20 @@
 (ns hbase-packet-inspector.core
-  (:require [clojure.core.match :refer [match]]
+  (:require [cemerick.url :refer [query->map]]
+            [clojure.core.match :refer [match]]
             [clojure.string :as str]
             [clojure.tools.cli :refer [parse-opts]]
             [clojure.tools.logging :as log]
-            [cemerick.url :refer [query->map]]
-            [hbase-packet-inspector.db :as db]
-            [hbase-packet-inspector.kafka :as kafka])
+            [hbase-packet-inspector.hbase :as hbase]
+            [hbase-packet-inspector.pcap :as pcap]
+            [hbase-packet-inspector.sink.db :as db]
+            [hbase-packet-inspector.sink.kafka :as kafka])
   (:import (com.google.common.io ByteStreams)
-           (com.google.protobuf InvalidProtocolBufferException
-                                LiteralByteString)
+           (com.google.protobuf InvalidProtocolBufferException)
            (java.io ByteArrayInputStream ByteArrayOutputStream DataInputStream
                     EOFException)
            (java.sql Timestamp)
-           (java.util.concurrent CancellationException TimeoutException)
-           (org.apache.hadoop.hbase HRegionInfo)
-           (org.apache.hadoop.hbase.protobuf.generated ClientProtos$Action
-                                                       ClientProtos$Column
-                                                       ClientProtos$BulkLoadHFileRequest
-                                                       ClientProtos$GetRequest
-                                                       ClientProtos$GetResponse
-                                                       ClientProtos$MultiRequest
-                                                       ClientProtos$MultiResponse
-                                                       ClientProtos$MutateRequest
-                                                       ClientProtos$MutationProto
-                                                       ClientProtos$RegionAction
-                                                       ClientProtos$RegionActionResult
-                                                       ClientProtos$ResultOrException
-                                                       ClientProtos$ScanRequest
-                                                       ClientProtos$ScanResponse
-                                                       RPCProtos$RequestHeader
-                                                       RPCProtos$ResponseHeader)
-           (org.apache.hadoop.hbase.util Bytes)
-           (org.pcap4j.core BpfProgram$BpfCompileMode PcapHandle
-                            PcapHandle$Builder
-                            PcapNetworkInterface$PromiscuousMode Pcaps)
-           (org.pcap4j.packet IpV4Packet Packet TcpPacket)
-           (org.pcap4j.util NifSelector))
+           (java.util.concurrent CancellationException)
+           (org.pcap4j.core PcapHandle))
   (:gen-class))
 
 (def tty?
@@ -89,232 +68,12 @@ Options:
   {:count 10000
    :ms    2000})
 
-(defn live-handle
-  "Opens PcapHandle for the interface"
-  ^PcapHandle [interface ports]
-  (let [handle (.. (PcapHandle$Builder. interface)
-                   (snaplen (* 1024 64))
-                   (promiscuousMode PcapNetworkInterface$PromiscuousMode/NONPROMISCUOUS)
-                   (timeoutMillis 1000)
-                   build)]
-    (.setFilter handle
-                (str/join " or " (map (partial format "port %d") ports))
-                BpfProgram$BpfCompileMode/OPTIMIZE)
-    handle))
-
-(defn file-handle
-  "Opens PcapHandle from the existing file or from STDIN if path is -"
-  ^PcapHandle [path]
-  (Pcaps/openOffline path))
-
-(defn ->string-binary
-  "Returns a printable representation of a LiteralByteString.
-
-  Bytes/toStringBinary used to be slow, but it's fast since hbase-client 1.2.2.
-  See: https://issues.apache.org/jira/browse/HBASE-15569"
-  [^LiteralByteString bytes]
-  (Bytes/toStringBinary (.. bytes asReadOnlyByteBuffer)))
-
-(defn ->keyword
-  "Converts CamelCase string to lower-case keyword"
-  [s]
-  (-> s
-      (str/replace #"([a-z])([A-Z])"
-                   (fn [[_ a b]] (str a "-" (str/lower-case b))))
-      str/lower-case
-      keyword))
-
-(defn parse-region-name
-  "Extracts table name and encoded name from region name"
-  [^LiteralByteString name]
-  (let [as-bytes (-> name .asReadOnlyByteBuffer Bytes/getBytes)
-        table    (Bytes/toStringBinary ^bytes (first (HRegionInfo/parseRegionName as-bytes)))
-        encoded  (HRegionInfo/encodeRegionName as-bytes)]
-    {:table  table
-     :region encoded}))
-
-(defn parse-get-request
-  "Parses GetRequest"
-  [^ClientProtos$GetRequest request]
-  (let [get (.. request getGet)
-        families (.. get getColumnList)
-        all-qualifiers (reduce + (for [^ClientProtos$Column family families]
-                                   (.. family getQualifierCount)))]
-    (assoc (parse-region-name (.. request getRegion getValue))
-           :row (->string-binary (.. get getRow))
-           :cells all-qualifiers)))
-
-(defn parse-scan-request
-  "Parses ScanRequest. :method in the returned map can be one of the followings:
-     :open-scanner [*]
-     :next-rows
-     :close-scanner
-     :small-scan [*]
-
-     [*]: has parameters"
-  [^ClientProtos$ScanRequest request]
-  (let [scan   (.. request getScan)
-        open?  (not (.. request hasScannerId))
-        close? (.. request getCloseScanner)
-        method (cond
-                 (and open? close?) :small-scan
-                 open?              :open-scanner
-                 close?             :close-scanner
-                 :else              :next-rows)]
-    (merge {:method  method
-            :scanner (.. request getScannerId)}
-           (when (#{:open-scanner :small-scan} method)
-             (merge (parse-region-name (.. request getRegion getValue))
-                    {:caching (.. scan getCaching)
-                     :row     (->string-binary (.. scan getStartRow))
-                     :stoprow (->string-binary (.. scan getStopRow))})))))
-
-(defn parse-mutation
-  "Parses MutationProto"
-  [^ClientProtos$MutationProto mutation]
-  {:method     (->keyword (.. mutation getMutateType name))
-   :row        (->string-binary (.. mutation getRow))
-   :cells      (+ (.. mutation getAssociatedCellCount)
-                  (.. mutation getColumnValueList size))
-   :durability (.. mutation getDurability name toLowerCase)})
-
-(defn parse-mutate-request
-  "Parses MutateRequest"
-  [^ClientProtos$MutateRequest request]
-  (let [base   (parse-mutation (.. request getMutation))
-        method (:method base)
-        method (if (.. request hasCondition)
-                 (keyword (str "check-and-" (name method)))
-                 method)]
-    (merge base
-           {:method method}
-           (parse-region-name (.. request getRegion getValue)))))
-
-(defn parse-multi-request
-  "Parses MultiRequest and returns the list of actions"
-  [^ClientProtos$MultiRequest multi-request]
-  (let [region-actions (.. multi-request getRegionActionList)]
-    (for [^ClientProtos$RegionAction region-action region-actions
-          ^ClientProtos$Action action (.. region-action getActionList)
-          :let [region (parse-region-name (.. region-action getRegion getValue))]]
-      (merge
-       (if (.hasGet action)
-         {:method :get
-          :row    (->string-binary (.. action getGet getRow))}
-         (parse-mutation (.. action getMutation)))
-       region))))
-
-(defn parse-bulk-load-hfile-request
-  "Parses BulkLoadHFileRequest"
-  [^ClientProtos$BulkLoadHFileRequest request]
-  (parse-region-name (.. request getRegion getValue)))
-
-(defn parse-request
-  "Processes request from client"
-  [^RPCProtos$RequestHeader header bais]
-  (let [method  (.getMethodName header)
-        method  (if (re-matches #"[a-zA-Z]+" method)
-                  (->keyword method)
-                  (throw (InvalidProtocolBufferException. "Invalid method name")))
-        call-id (.getCallId header)
-        params? (and (.hasRequestParam header)
-                     (.getRequestParam header))
-        base    {:method method :call-id call-id}]
-    (merge
-     base
-     (when params?
-       (case method
-         :get
-         (let [request (ClientProtos$GetRequest/parseDelimitedFrom bais)]
-           (parse-get-request request))
-
-         :scan
-         (let [request (ClientProtos$ScanRequest/parseDelimitedFrom bais)]
-           (parse-scan-request request))
-
-         :mutate
-         (let [request (ClientProtos$MutateRequest/parseDelimitedFrom bais)]
-           (parse-mutate-request request))
-
-         :multi
-         (let [request (ClientProtos$MultiRequest/parseDelimitedFrom bais)
-               actions (parse-multi-request request)
-               table   (some-> (filter :table actions) first :table)]
-           {:table   table
-            :actions actions})
-
-         :bulk-load-hfile
-         (let [request (ClientProtos$BulkLoadHFileRequest/parseDelimitedFrom bais)]
-           (parse-bulk-load-hfile-request request))
-         {})))))
-
-(defn parse-scan-response
-  "Parses ScanResponses to extract the total number of cells"
-  [^ClientProtos$ScanResponse response]
-  {:scanner (.. response getScannerId)
-   :cells   (reduce + (.. response getCellsPerResultList))})
-
-(defn parse-get-response
-  "Parses GetResponse to extract the number of cells"
-  [^ClientProtos$GetResponse response]
-  {:cells (+ (.. response getResult getAssociatedCellCount)
-             (.. response getResult getCellList size))})
-
-(defn parse-multi-response
-  "Parses MultiResponse to extract the number of cells"
-  [^ClientProtos$MultiResponse response actions]
-  (let [results (for [^ClientProtos$RegionActionResult region-response     (.getRegionActionResultList response)
-                      ^ClientProtos$ResultOrException  result-or-exception (.getResultOrExceptionList region-response)
-                      :let  [result?    (.hasResult    result-or-exception)
-                             exception? (.hasException result-or-exception)
-                             result     (.getResult result-or-exception)]]
-                  {:cells     (when result? (+ (.. result getAssociatedCellCount)
-                                               (.. result getCellList size)))
-                   :exception (when exception?
-                                (some-> result-or-exception .getException .getName))})]
-    {:cells   (reduce + (filter some? (map :cells results)))
-     :actions (map merge actions results)}))
-
-(defn parse-response
-  "Processes response to client. Uses request-fn to find the request map for
-  the call-id."
-  [^RPCProtos$ResponseHeader header bais request-fn]
-  (let [call-id (.. header getCallId)
-        error?  (.. header hasException)
-        request (request-fn call-id)
-        method  (if request (:method request) :unknown)
-        base    (conj {:method  method
-                       :call-id call-id}
-                      (when error?
-                        [:error (.. header getException getExceptionClassName)]))]
-    (merge
-     request ; can be nil, but it's okay
-     base
-     (match [method]
-       [(:or :open-scanner :next-rows :close-scanner)]
-       (let [response (ClientProtos$ScanResponse/parseDelimitedFrom bais)]
-         (parse-scan-response response))
-
-       [:get]
-       (let [response (ClientProtos$GetResponse/parseDelimitedFrom bais)]
-         (parse-get-response response))
-
-       [:multi]
-       (let [response (ClientProtos$MultiResponse/parseDelimitedFrom bais)]
-         (parse-multi-response response (:actions request)))
-
-       [_] nil))))
-
 (defn parse-stream
   "Processes the byte stream and returns the map representation of request or
   response"
-  [inbound? ^ByteArrayInputStream bais total-size request-fn]
-  (let [as-map (if inbound?
-                 (let [header (RPCProtos$RequestHeader/parseDelimitedFrom bais)]
-                   (parse-request header bais))
-                 (let [header (RPCProtos$ResponseHeader/parseDelimitedFrom bais)]
-                   (parse-response header bais request-fn)))]
-    (assoc as-map :size total-size)))
+  [inbound? ^ByteArrayInputStream bais total-size request-finder]
+  (assoc (hbase/parse-stream inbound? bais request-finder)
+         :size total-size))
 
 (defn valid-length?
   "Checks if the length of the request is valid.
@@ -403,32 +162,32 @@ Options:
 
   [packet-map ports timestamp state proc-fn]
   {:pre [(set? ports)]}
-  (let [{:keys       [data length]} packet-map
-        inbound?     (some? (ports (-> packet-map :dst :port)))
-        server       (packet-map (if inbound? :dst :src))
-        client       (packet-map (if inbound? :src :dst))
-        client-state (state [:client client])
-        request-fn   (fn [call-id] (state [:call client call-id]))
-        base-map     {:ts       timestamp
-                      :inbound? inbound?
-                      :server   (:addr server)
-                      :client   (:addr client)
-                      :port     (:port client)}
-        next-state   (fn [parsed]
-                       (let [info (merge parsed base-map) ; mind the order
-                             {:keys [call-id]} info
-                             info (or (some->
-                                       (when-not inbound? (request-fn call-id))
-                                       :ts
-                                       (some->> (sub-ts timestamp)
-                                                (assoc info :elapsed)))
-                                      info)
-                             [state info] (process-scan-state state client info)]
-                         (proc-fn info)
-                         (dissoc (if inbound?
-                                   (assoc state [:call client call-id] info)
-                                   (dissoc state [:call client call-id]))
-                                 [:client client])))]
+  (let [{:keys         [data length]} packet-map
+        inbound?       (some? (ports (-> packet-map :dst :port)))
+        server         (packet-map (if inbound? :dst :src))
+        client         (packet-map (if inbound? :src :dst))
+        client-state   (state [:client client])
+        request-finder (fn [call-id] (state [:call client call-id]))
+        base-map       {:ts       timestamp
+                        :inbound? inbound?
+                        :server   (:addr server)
+                        :client   (:addr client)
+                        :port     (:port client)}
+        next-state     (fn [parsed]
+                         (let [info (merge parsed base-map) ; mind the order
+                               {:keys [call-id]} info
+                               info (or (some->
+                                         (when-not inbound? (request-finder call-id))
+                                         :ts
+                                         (some->> (sub-ts timestamp)
+                                                  (assoc info :elapsed)))
+                                        info)
+                               [state info] (process-scan-state state client info)]
+                           (proc-fn info)
+                           (dissoc (if inbound?
+                                     (assoc state [:call client call-id] info)
+                                     (dissoc state [:call client call-id]))
+                                   [:client client])))]
     (if-not (and data (some ports [(-> packet-map :src :port)
                                    (-> packet-map :dst :port)]))
       state
@@ -449,7 +208,7 @@ Options:
                       copied (ByteStreams/copy bais baos)]
                   (assoc state [:client client]
                          {:ts timestamp :out baos :total total :remains (- total copied)}))
-                (next-state (parse-stream inbound? bais total request-fn)))))
+                (next-state (parse-stream inbound? bais total request-finder)))))
 
           ;;; Continued fragment
           (let [{:keys  [out total remains]} client-state
@@ -461,7 +220,7 @@ Options:
                      (assoc client-state :ts timestamp :remains remains))
               (let [ba   (.toByteArray ^ByteArrayOutputStream out)
                     bais (ByteArrayInputStream. ba)]
-                (next-state (parse-stream inbound? bais total request-fn))))))
+                (next-state (parse-stream inbound? bais total request-finder))))))
         (catch Exception e
           (when-not (instance? InvalidProtocolBufferException e)
             (log/warn e))
@@ -490,22 +249,6 @@ Options:
                        :port    port
                        :call-id call-id))))
     (insert table info)))
-
-(defn get-next-packet
-  "Retrieves the next packet from the handle. getNextPacketEx can throw
-  TimeoutException if there is no new packet for the interface or when the
-  packet is buffered by OS. This function retries in that case."
-  [^PcapHandle handle]
-  (loop []
-    (let [result (try
-                   (.getNextPacketEx handle)
-                   (catch TimeoutException _
-                     (Thread/sleep 100) ; needed for future-cancel
-                     ::retry)
-                   (catch java.io.EOFException _ nil))]
-      (if (= result ::retry)
-        (recur)
-        result))))
 
 (defn trim-state-expired
   "Removes state objects that are not handled correctly within the period"
@@ -562,35 +305,6 @@ Options:
 
 (def trim-state (comp trim-state-by-memory trim-state-expired))
 
-(defn packet->map
-  "Returns essential information parsed from the given packet as a map.
-  Returns nil if necessary information is not found."
-  [^Packet packet]
-  (let [^IpV4Packet ipv4 (.get packet IpV4Packet)
-        ^TcpPacket  tcp  (.get packet TcpPacket)
-        data        (when tcp (.getPayload tcp))
-        ipv4-header (when ipv4 (.getHeader ipv4))
-        tcp-header  (when tcp (.getHeader tcp))]
-    (when (every? some? [data ipv4-header tcp-header])
-      {:src {:addr (.. ipv4-header getSrcAddr getHostAddress)
-             :port (.. tcp-header  getSrcPort valueAsInt)}
-       :dst {:addr (.. ipv4-header getDstAddr getHostAddress)
-             :port (.. tcp-header  getDstPort valueAsInt)}
-       :length (.. data length)
-       :data   (.. data getRawData)})))
-
-(defn parse-next-packet
-  [^PcapHandle handle]
-  (let [packet (try (get-next-packet handle)
-                    (catch InterruptedException e
-                      (log/warn e)
-                      nil))
-        packet-map (when packet (packet->map packet))]
-    (cond
-      (nil? packet) ::interrupt
-      (nil? packet-map) ::ignore
-      :else packet-map)))
-
 (defn read-handle
   "Reads packets from the handle"
   [^PcapHandle handle port verbose count duration sink]
@@ -602,10 +316,10 @@ Options:
            first-ts nil
            seen     0
            prev     {:seen 0 :ts (System/currentTimeMillis)}]
-      (let [packet-map (parse-next-packet handle)]
+      (let [packet-map (pcap/parse-next-packet handle)]
         (case packet-map
-          ::interrupt (logger seen)
-          ::ignore (recur state first-ts seen prev)
+          ::pcap/interrupt (logger seen)
+          ::pcap/ignore (recur state first-ts seen prev)
           (let [latest-ts (.getTimestamp handle)
                 first-ts  (or first-ts latest-ts)
                 new-state (process-hbase-packet
@@ -628,13 +342,13 @@ Options:
 (defn read-pcap-file
   "Loads pcap file into in-memory h2 database"
   [file-name sink & {:keys [port verbose count duration]}]
-  (with-open [handle (file-handle file-name)]
+  (with-open [handle (pcap/file-handle file-name)]
     (read-handle handle port verbose count duration sink)))
 
 (defn read-net-interface
   "Captures packets from the interface and loads into the database"
   [interface sink & {:keys [port verbose count duration]}]
-  (with-open [handle (live-handle interface hbase-ports)]
+  (with-open [handle (pcap/live-handle interface hbase-ports)]
     (when tty? (log/info "Press enter key to stop capturing"))
     (let [f (future (read-handle handle port verbose count duration sink))]
       (if duration
@@ -642,9 +356,8 @@ Options:
         (if tty? (read-line) (deref f)))
       (log/info "Closing the handle")
       (future-cancel f)
-      (try @f
-           (catch CancellationException e
-             (log/warn e))))
+      (try @f (catch CancellationException e
+                (log/warn e))))
     (let [stats (.getStats handle)]
       (log/infof "%d packet(s) received, %d dropped"
                  (.getNumPacketsReceived stats)
@@ -656,7 +369,7 @@ Options:
   (when-not tty?
     (throw (IllegalArgumentException.
             "Cannot select device as stdin is not tty. Use --interface option.")))
-  (some-> (NifSelector.) .selectNetworkInterface .getName))
+  (pcap/select-interface))
 
 (defn- print-usage!
   "Prints usage and terminates the program"

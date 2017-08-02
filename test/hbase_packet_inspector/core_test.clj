@@ -1,11 +1,9 @@
 (ns hbase-packet-inspector.core-test
-  (:require [clojure.test :refer :all]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
+            [clojure.test :refer :all]
             [clojure.tools.cli :refer [parse-opts]]
             [hbase-packet-inspector.core :refer :all])
-  (:import (com.google.protobuf ByteString
-                                LiteralByteString)
-           (java.sql Timestamp)))
+  (:import (java.sql Timestamp)))
 
 (deftest test-cli-options
   (testing "Combo"
@@ -21,22 +19,6 @@
   (testing "Empty interface"
     (let [{:keys [errors]} (parse-opts ["-i" ""] cli-options)]
       (is (str/includes? (first errors) "Must be a non-empty string")))))
-
-(deftest test->string-binary
-  (is (= "[\\x5C]^_`abcdefghijklmnopqrstuvwxyz{|}~\\x7F\\x80\\x81"
-         (->string-binary
-          (ByteString/copyFrom (byte-array (range 91 130)))))))
-
-(deftest test->keyword
-  (is (= :get (->keyword "Get")))
-  (is (= :get (->keyword "GET")))
-  (is (= :get-online-regions (->keyword "GetOnlineRegions"))))
-
-(deftest test-parse-region-name
-  (is (= {:table "tablename" :region "<...encoded-name-in-32-bytes...>"}
-         (parse-region-name
-          (ByteString/copyFromUtf8
-           "tablename,startkey,timestamp.<...encoded-name-in-32-bytes...>.")))))
 
 (deftest test-process-scan-state
   (let [client :alice

@@ -1,4 +1,4 @@
-(ns hbase-packet-inspector.kafka
+(ns hbase-packet-inspector.sink.kafka
   (:require [cheshire.core :as json]
             [grouper.core :as grouper])
   (:import (java.util Properties)
