@@ -89,21 +89,6 @@ Options:
   {:count 10000
    :ms    2000})
 
-(defn packet->map
-  "Returns essential information from the given packet as a map"
-  [^Packet packet]
-  (let [^IpV4Packet ipv4 (.get packet IpV4Packet)
-        ^TcpPacket  tcp  (.get packet TcpPacket)
-        ^Packet     data (.getPayload tcp)]
-    (let [ipv4-header (.getHeader ipv4)
-          tcp-header  (.getHeader tcp)]
-      {:src {:addr (.. ipv4-header getSrcAddr getHostAddress)
-             :port (.. tcp-header  getSrcPort valueAsInt)}
-       :dst {:addr (.. ipv4-header getDstAddr getHostAddress)
-             :port (.. tcp-header  getDstPort valueAsInt)}
-       :length (and data (.. data length))
-       :data   (and data (.. data getRawData))})))
-
 (defn live-handle
   "Opens PcapHandle for the interface"
   ^PcapHandle [interface ports]
@@ -390,9 +375,9 @@ Options:
   (- (.getTime ts2) (.getTime ts1)))
 
 (defn process-hbase-packet
-  "Parses the raw packet into a map and executes proc-fn with it.
-  Returns the new state for the next iteration. state map can have the
-  following types of states.
+  "Executes proc-fn with with the map parsed from a packet. Returns the new
+  state for the next iteration. state map can have the following types of
+  states.
 
   [:client client]              => ByteArrayOutputStream
   [:call client call-id]        => Request
@@ -416,13 +401,12 @@ Options:
   of the states that are not essential to the workload, such as initial
   connetion handshake."
 
-  [^Packet packet ports timestamp state proc-fn]
+  [packet-map ports timestamp state proc-fn]
   {:pre [(set? ports)]}
-  (let [raw          (packet->map packet)
-        {:keys       [data length]} raw
-        inbound?     (some? (ports (-> raw :dst :port)))
-        server       (raw (if inbound? :dst :src))
-        client       (raw (if inbound? :src :dst))
+  (let [{:keys       [data length]} packet-map
+        inbound?     (some? (ports (-> packet-map :dst :port)))
+        server       (packet-map (if inbound? :dst :src))
+        client       (packet-map (if inbound? :src :dst))
         client-state (state [:client client])
         request-fn   (fn [call-id] (state [:call client call-id]))
         base-map     {:ts       timestamp
@@ -445,8 +429,8 @@ Options:
                                    (assoc state [:call client call-id] info)
                                    (dissoc state [:call client call-id]))
                                  [:client client])))]
-    (if-not (and data (some ports [(-> raw :src :port)
-                                   (-> raw :dst :port)]))
+    (if-not (and data (some ports [(-> packet-map :src :port)
+                                   (-> packet-map :dst :port)]))
       state
       (try
         (if-not client-state
@@ -578,6 +562,35 @@ Options:
 
 (def trim-state (comp trim-state-by-memory trim-state-expired))
 
+(defn packet->map
+  "Returns essential information parsed from the given packet as a map.
+  Returns nil if necessary information is not found."
+  [^Packet packet]
+  (let [^IpV4Packet ipv4 (.get packet IpV4Packet)
+        ^TcpPacket  tcp  (.get packet TcpPacket)
+        data        (when tcp (.getPayload tcp))
+        ipv4-header (when ipv4 (.getHeader ipv4))
+        tcp-header  (when tcp (.getHeader tcp))]
+    (when (every? some? [data ipv4-header tcp-header])
+      {:src {:addr (.. ipv4-header getSrcAddr getHostAddress)
+             :port (.. tcp-header  getSrcPort valueAsInt)}
+       :dst {:addr (.. ipv4-header getDstAddr getHostAddress)
+             :port (.. tcp-header  getDstPort valueAsInt)}
+       :length (.. data length)
+       :data   (.. data getRawData)})))
+
+(defn parse-next-packet
+  [^PcapHandle handle]
+  (let [packet (try (get-next-packet handle)
+                    (catch InterruptedException e
+                      (log/warn e)
+                      nil))
+        packet-map (when packet (packet->map packet))]
+    (cond
+      (nil? packet) ::interrupt
+      (nil? packet-map) ::ignore
+      :else packet-map)))
+
 (defn read-handle
   "Reads packets from the handle"
   [^PcapHandle handle port verbose count duration sink]
@@ -589,29 +602,28 @@ Options:
            first-ts nil
            seen     0
            prev     {:seen 0 :ts (System/currentTimeMillis)}]
-      (if-let [packet (try (get-next-packet handle)
-                           (catch InterruptedException e
-                             (log/warn e)
-                             nil))]
-        (let [latest-ts (.getTimestamp handle)
-              first-ts  (or first-ts latest-ts)
-              new-state (process-hbase-packet
-                         packet ports latest-ts state #(send! sink % verbose))
-              now       (System/currentTimeMillis)
-              seen      (inc seen)
-              tdiff     (- now  (:ts   prev))
-              diff      (- seen (:seen prev))
-              print?    (or (>= tdiff (:ms report-interval))
-                            (>= diff  (:count report-interval)))]
-          (when print?
-            (logger seen))
-          (if (and (or (nil? count) (< seen count))
-                   (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
-            (if print?
-              (recur (trim-state new-state latest-ts) first-ts seen {:seen seen :ts now})
-              (recur new-state first-ts seen prev))
-            (logger seen)))
-        (logger seen)))))
+      (let [packet-map (parse-next-packet handle)]
+        (case packet-map
+          ::interrupt (logger seen)
+          ::ignore (recur state first-ts seen prev)
+          (let [latest-ts (.getTimestamp handle)
+                first-ts  (or first-ts latest-ts)
+                new-state (process-hbase-packet
+                           packet-map ports latest-ts state #(send! sink % verbose))
+                now       (System/currentTimeMillis)
+                seen      (inc seen)
+                tdiff     (- now  (:ts   prev))
+                diff      (- seen (:seen prev))
+                print?    (or (>= tdiff (:ms report-interval))
+                              (>= diff  (:count report-interval)))]
+            (when print?
+              (logger seen))
+            (if (and (or (nil? count) (< seen count))
+                     (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
+              (if print?
+                (recur (trim-state new-state latest-ts) first-ts seen {:seen seen :ts now})
+                (recur new-state first-ts seen prev))
+              (logger seen))))))))
 
 (defn read-pcap-file
   "Loads pcap file into in-memory h2 database"
