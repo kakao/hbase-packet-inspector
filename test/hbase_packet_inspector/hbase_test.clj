@@ -91,7 +91,7 @@
 (deftest test-parse-multi-response
   (is (= {:cells 12
           :actions [{:foo :bar :cells 12 :exception nil}
-                    {:FOO :BAR :cells 0 :exception "foo"}]}
+                    {:FOO :BAR :cells nil :exception "foo"}]}
          (hbase/parse-multi-response (make-multi-response)
                                      [{:foo :bar}
                                       {:FOO :BAR}]))))
@@ -100,7 +100,7 @@
   (testing "multi"
     (is (= {:method :multi
             :actions [{:foo :bar, :cells 12, :exception nil}
-                      {:FOO :BAR, :cells 0, :exception "foo"}]
+                      {:FOO :BAR, :cells nil, :exception "foo"}]
             :call-id 1
             :error "error-class"
             :cells 12}

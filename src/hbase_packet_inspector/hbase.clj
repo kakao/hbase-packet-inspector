@@ -51,10 +51,9 @@
                       :let  [result?    (.hasResult    result-or-exception)
                              exception? (.hasException result-or-exception)
                              result     (.getResult result-or-exception)]]
-                  {:cells     (if result?
+                  {:cells     (when result?
                                 (+ (.. result getAssociatedCellCount)
-                                   (.. result getCellList size))
-                                0)
+                                   (.. result getCellList size)))
                    :exception (when exception?
                                 (some-> result-or-exception .getException .getName))})]
     {:cells   (reduce + (filter some? (map :cells results)))
