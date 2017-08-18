@@ -420,7 +420,7 @@ Options:
     (let [{:keys [server url]} (db/start-web-server connection)]
       (log/info "Started web server:" url)
       (db/start-shell connection)
-      (.stop server))))
+      (.stop ^org.h2.tools.Server server))))
 
 (defn -main
   [& args]
