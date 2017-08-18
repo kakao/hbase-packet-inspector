@@ -18,7 +18,7 @@
                  [org.apache.kafka/kafka-clients "0.11.0.0"]
                  [cheshire "5.7.1"]
                  [com.cemerick/url "0.1.1"]
-                 [junegunn/grouper "0.1.0"]]
+                 [junegunn/grouper "0.1.1"]]
   :plugins [[lein-bin "0.3.5"]]
   :bin {:bin-path "target"}
   :main hbase-packet-inspector.core
