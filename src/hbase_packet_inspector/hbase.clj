@@ -14,6 +14,7 @@
                                                        ClientProtos$MultiResponse
                                                        ClientProtos$MutateRequest
                                                        ClientProtos$MutationProto
+                                                       ClientProtos$MutationProto$ColumnValue
                                                        ClientProtos$RegionAction
                                                        ClientProtos$RegionActionResult
                                                        ClientProtos$ResultOrException
@@ -149,7 +150,8 @@
   {:method     (->keyword (.. mutation getMutateType name))
    :row        (->string-binary (.. mutation getRow))
    :cells      (+ (.. mutation getAssociatedCellCount)
-                  (.. mutation getColumnValueList size))
+                  (count (mapcat #(.getQualifierValueList ^ClientProtos$MutationProto$ColumnValue %)
+                                 (.. mutation getColumnValueList))))
    :durability (.. mutation getDurability name toLowerCase)})
 
 (defn parse-mutate-request
