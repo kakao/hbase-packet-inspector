@@ -25,42 +25,59 @@
       (.setProperty props k (str v)))
     props))
 
-(defn create-producer
-  "Creates a new Producer"
-  ^KafkaProducer [bootstrap-servers]
-  (KafkaProducer.
-   (map->props (producer-config bootstrap-servers))))
+(definterface ISender
+  (send  [record])
+  (close []))
+
+(deftype KafkaSender [^KafkaProducer producer]
+  ISender
+  (send [this record] (.send producer record))
+  (close [this]
+    (.flush producer)
+    (.close producer)))
+
+(defn create-sender
+  "Creates ISender based on Kafka Producer"
+  ^ISender [bootstrap-servers]
+  (KafkaSender.
+   (KafkaProducer.
+    (map->props (producer-config bootstrap-servers)))))
+
+(defn hostname
+  "Returns the host name"
+  []
+  (.. java.net.InetAddress getLocalHost getHostName))
 
 (defn make-record
   "Makes ProducerRecord to send"
   ^ProducerRecord [topic record]
-  (ProducerRecord.
-   topic
-   (json/generate-string record)))
+  (ProducerRecord. topic (json/generate-string record)))
+
+(defn send-fn
+  "Returns send function for sending formatted record to the specified sender"
+  [^ISender sender extra-pairs]
+  (fn [topic record]
+    (let [ts     (.getTime ^java.sql.Timestamp (:ts record))
+          record (merge (assoc record :ts ts) extra-pairs)]
+      (.send sender (make-record topic record)))))
 
 (defn send-and-close-fn
-  "Returns two functions; one for sending records to Kafka as flat json format
+  "Returns two functions; one for sending records to Kafka as json format
   records, and another for closing the batch pool and Kafka producer."
-  [bootstrap-servers topic & [extra-pairs]]
-  (let [producer   (create-producer bootstrap-servers)
-        hostname   (.. java.net.InetAddress getLocalHost getHostName)
+  [bootstrap-servers topic1 topic2 & [extra-pairs]]
+  (let [sender     (create-sender bootstrap-servers)
+        send       (send-fn sender (merge {:hostname (hostname)} extra-pairs))
         batch-pool (grouper/start!
-                    (fn [items]
-                      (doseq [item items]
-                        (.send producer
-                               (make-record
-                                topic
-                                (merge (assoc item
-                                              :hostname hostname
-                                              :ts (.getTime ^java.sql.Timestamp (:ts item)))
-                                       extra-pairs)))))
+                    #(doseq [[topic record] %] (send topic record))
                     :capacity 1000
                     :interval 200
                     :pool 2)]
-    [(fn [table record]
-       (when (= table :responses)
-         (grouper/submit! batch-pool record)))
+    [(fn [record]
+       {:pre [(contains? record :inbound?)
+              (contains? record :ts)]}
+       (let [topic (if (:inbound? record) topic1 topic2)]
+         (when (seq topic)
+           (grouper/submit! batch-pool [topic record]))))
      (fn []
        (.close batch-pool)
-       (.flush producer)
-       (.close producer))]))
+       (.close sender))]))

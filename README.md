@@ -9,7 +9,7 @@ via its web SQL interface.
 hbase-packet-inspector can read tcpdump output files or a live capture from a
 network interface (the latter requires root permission).
 
-```sh
+```
 Usage:
   hbase-packet-inspector [OPTIONS] [-i INTERFACE]
   hbase-packet-inspector [OPTIONS] FILES...
@@ -21,12 +21,17 @@ Options:
   -c --count=COUNT          Maximum number of packets to process
   -d --duration=DURATION    Number of seconds to capture packets
   -k --kafka=SERVERS/TOPIC  Kafka bootstrap servers and the name of the topic
+                              TOPIC:
+                                T:     Both requests and responses to T
+                                T1/T2: Requests to T1, responses to T2
+                                T/:    Requests to T, responses are ignored
+                                /T:    Requests are ignored, responses to T
   -v --verbose              Verbose output
 ```
 
 If `--kafka` option is used, hbase-packet-inspector will send records for
-`responses` table to the specified Kafka cluster as flat json records, instead
-of creating in-memory database.
+`requests` and `responses` table to the specified Kafka cluster as json
+records, instead of creating in-memory database.
 
 You can send additional key-value pairs to Kafka as follows:
 

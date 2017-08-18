@@ -35,6 +35,11 @@ Options:
   -c --count=COUNT          Maximum number of packets to process
   -d --duration=DURATION    Number of seconds to capture packets
   -k --kafka=SERVERS/TOPIC  Kafka bootstrap servers and the name of the topic
+                              TOPIC:
+                                T:     Both requests and responses to T
+                                T1/T2: Requests to T1, responses to T2
+                                T/:    Requests to T, responses are ignored
+                                /T:    Requests are ignored, responses to T
   -v --verbose              Verbose output")
 
 (def cli-options
@@ -60,7 +65,8 @@ Options:
   #{16020 60020})
 
 (def state-expiration-ms
-  "Any state object that stayed over this period will be expired"
+  "Any state object that stayed over this period will be expired. The default
+  is 2 minutes."
   120000)
 
 (def report-interval
@@ -109,7 +115,7 @@ Options:
             request (get state key)
             state   (dissoc state key)
             state   (assoc state [:scanner scanner] request)]
-        [state (merge request parsed)])
+        [state parsed])
 
       ;;; 3. Attach region info from the Scan request for the scanner-id
       ;;;    and update timestamp of the scanner state
@@ -124,7 +130,7 @@ Options:
       ;;; State transition is simpler for small scans
       [:small-scan false]
       (let [key [:scanner-for client call-id]]
-        [(dissoc state key) (merge parsed region-info)])
+        [(dissoc state key) parsed])
 
       [_ _] [state parsed])))
 
@@ -228,27 +234,28 @@ Options:
           (dissoc state [:client client]))))))
 
 (defn send!
-  "Inserts request/response information into h2 database tables"
-  [insert info verbose]
+  "Sends request/response information into sink (H2 database or Kafka)"
+  [sink info verbose]
   (let [{:keys [inbound? actions client port call-id cells]} info
         batch  (count actions)
         multi? (> batch 1)
         info   (merge info (when (= batch 1) (first actions)))
-        table  (if inbound? :requests :responses)
-        info   (assoc info
+        info   (assoc (dissoc info :actions)
                       :batch batch
                       :cells (or cells
-                                 (reduce + (remove nil? (map :cells actions)))))]
+                                 (reduce + (remove nil? (map :cells actions)))))
+        info  (if multi?
+                (assoc info
+                       (if inbound? :actions :results)
+                       (for [action actions]
+                         (assoc action
+                                :client  client
+                                :port    port
+                                :call-id call-id)))
+                info)]
     (when verbose
       (log/info info))
-    (when multi?
-      (doseq [action actions]
-        (insert (if inbound? :actions :results)
-                (assoc action
-                       :client  client
-                       :port    port
-                       :call-id call-id))))
-    (insert table info)))
+    (sink info)))
 
 (defn trim-state-expired
   "Removes state objects that are not handled correctly within the period"
@@ -380,27 +387,36 @@ Options:
    (println usage)
    (System/exit status)))
 
-(defn ->kafka
-  "Parses --kafka option and executes process function with Kafka sink"
-  [servers-spec process]
-  (let [[servers topic] (str/split servers-spec #"/" 2)
-        [topic query] (str/split (or topic "") #"\?" 2)
+(defn parse-kafka-spec
+  "Parses --kafka option"
+  [kafka-spec]
+  (let [[_ servers topic1 topic2 query]
+        (re-matches #"^([^/]+)/([^/]*)(?:/([^/]*?))?(?:\?(.*))?$" kafka-spec)
         extra-pairs (query->map query)]
-    (when-not (seq topic)
-      (throw (IllegalArgumentException. "Invalid topic name")))
+    (when (or (nil? servers) (every? nil? (map seq [topic1 topic2])))
+      (throw (IllegalArgumentException. "Invalid Kafka spec")))
+    {:servers servers
+     :topic1 topic1
+     :topic2 (or topic2 topic1)
+     :extra-pairs (query->map query)}))
+
+(defn with-kafka*
+  "Executes process function with Kafka sink"
+  [kafka-spec process]
+  (let [{:keys [servers topic1 topic2 extra-pairs]} (parse-kafka-spec kafka-spec)]
     (log/info "Creating Kafka producer")
-    (let [[send close] (kafka/send-and-close-fn servers topic extra-pairs)]
+    (let [[send close] (kafka/send-and-close-fn servers topic1 topic2 extra-pairs)]
       (process send)
       (log/info "Closing Kafka producer")
       (close))))
 
-(defn ->db
+(defn with-db*
   "Executes process function with in-memory DB sink"
   [process]
   (let [connection (db/connect)]
     (log/info "Creating database schema")
     (db/create connection)
-    (process (db/prepared-insert-fn connection))
+    (process (db/sink-fn connection))
     (let [{:keys [server url]} (db/start-web-server connection)]
       (log/info "Started web server:" url)
       (db/start-shell connection)
@@ -420,20 +436,21 @@ Options:
               "Cannot load data into in-memory database indefinitely")))
 
     (let [options [:port port :verbose verbose :count count :duration duration]
-          process (if (seq arguments)
-                    ;; From files
-                    #(doseq [file arguments]
-                       (log/info "Loading" file)
-                       (apply read-pcap-file file % options))
-                    ;; From a live capture
-                    #(apply read-net-interface
-                            (or interface (select-nif) (System/exit 1)) %
-                            options))]
+          with-sink* (if kafka with-kafka* with-db*)]
       (try
-        (if kafka
-          (->kafka kafka process)
-          (->db process))
+        (with-sink*
+          (fn [sink]
+            (if (seq arguments)
+              ;; From files
+              (doseq [file arguments]
+                (log/info "Loading" file)
+                (apply read-pcap-file file sink options))
+              ;; From a live capture
+              (apply read-net-interface
+                     (or interface (select-nif) (System/exit 1))
+                     sink
+                     options))))
         (catch Exception e
-          (log/warn e))))
+          (log/error e))))
 
     (shutdown-agents)))

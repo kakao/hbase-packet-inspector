@@ -14,7 +14,7 @@
   (some-> (NifSelector.) .selectNetworkInterface .getName))
 
 (defn live-handle
-  "Opens PcapHandle for the interface"
+  "Opens PcapHandle for the interface. Requires root permission."
   ^PcapHandle [interface ports]
   (let [handle (.. (PcapHandle$Builder. interface)
                    (snaplen (* 1024 64))
@@ -65,10 +65,13 @@
         result))))
 
 (defn parse-next-packet
+  "Retrieves the next packet from the handle and parses it using packet->map
+  function. ::interrupt is returned if interrupted or the end of file handle is
+  reached. ::ignore can be returned while reading a live handle."
   [^PcapHandle handle]
   (let [packet (try (get-next-packet handle)
                     (catch InterruptedException e
-                      (log/warn e)
+                      (log/warn (.getMessage e))
                       nil))
         packet-map (when packet (packet->map packet))]
     (cond

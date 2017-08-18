@@ -1,6 +1,6 @@
 (ns hbase-packet-inspector.pcap-test
   (:require [clojure.test :refer :all]
-            [hbase-packet-inspector.pcap :refer :all])
+            [hbase-packet-inspector.pcap :as pcap :refer :all])
   (:import (java.net InetAddress)
            (org.pcap4j.packet AbstractPacket IpV4Packet$Builder IpV4Rfc1349Tos
                               TcpPacket$Builder UnknownPacket$Builder)
@@ -38,4 +38,17 @@
 
 (deftest test-packet->map-may-return-nil
   (let [empty-packet (proxy [AbstractPacket] []
-                       (iterator [] (.iterator [])))]))
+                       (iterator [] (.iterator [])))]
+    (is (= nil (packet->map empty-packet)))))
+
+(deftest test-parse-next-packet
+  (with-redefs [get-next-packet (constantly nil)]
+    (is (= ::pcap/interrupt (parse-next-packet nil))))
+  (with-redefs [get-next-packet #(throw (InterruptedException. %))]
+    (is (= ::pcap/interrupt (parse-next-packet "interrupted"))))
+  (with-redefs [get-next-packet (constantly :foo)
+                packet->map (constantly nil)]
+    (is (= ::pcap/ignore (parse-next-packet nil))))
+  (with-redefs [get-next-packet (constantly :foo)
+                packet->map (constantly :bar)]
+    (is (= :bar (parse-next-packet nil)))))
