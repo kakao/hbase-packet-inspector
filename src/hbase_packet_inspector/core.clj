@@ -363,8 +363,8 @@ Options:
         (if tty? (read-line) (deref f)))
       (log/info "Closing the handle")
       (future-cancel f)
-      (try @f (catch CancellationException e
-                (log/warn e))))
+      (try @f (catch CancellationException _)))
+
     (let [stats (.getStats handle)]
       (log/infof "%d packet(s) received, %d dropped"
                  (.getNumPacketsReceived stats)
