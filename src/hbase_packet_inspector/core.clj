@@ -2,7 +2,7 @@
   (:require [cemerick.url :refer [query->map]]
             [clojure.core.match :refer [match]]
             [clojure.string :as str]
-            [clojure.tools.cli :refer [parse-opts]]
+            [clojure.tools.cli :as cli]
             [clojure.tools.logging :as log]
             [hbase-packet-inspector.hbase :as hbase]
             [hbase-packet-inspector.pcap :as pcap]
@@ -236,19 +236,19 @@ Options:
 (defn send!
   "Sends request/response information into sink (H2 database or Kafka)"
   [sink info verbose]
-  (let [{:keys [inbound? actions client port call-id cells]} info
+  (let [{:keys [inbound? actions results client port call-id cells]} info
         batch  (count actions)
         multi? (> batch 1)
         info   (merge info (when (= batch 1) (first actions)))
-        info   (assoc (dissoc info :actions)
+        info   (assoc (dissoc info :actions :results)
                       :batch batch
                       :cells (or cells
                                  (reduce + (remove nil? (map :cells actions)))))
         info  (if multi?
                 (assoc info
                        (if inbound? :actions :results)
-                       (for [action actions]
-                         (assoc action
+                       (for [elem (if inbound? actions results)]
+                         (assoc elem
                                 :client  client
                                 :port    port
                                 :call-id call-id)))
@@ -286,11 +286,16 @@ Options:
     (< bytes (Math/pow 1024 3)) (format "%.02f MiB" (/ bytes (Math/pow 1024 2)))
     :else                       (format "%.02f GiB" (/ bytes (Math/pow 1024 3)))))
 
+(defn max-memory
+  "Returns the maximum amount of memory that can be used by this process"
+  []
+  (.. Runtime getRuntime maxMemory))
+
 (defn trim-state-by-memory
   "Makes sure that the state objects do not occupy more than 50% of the total
   available memory."
   [state]
-  (let [memory-max   (.. Runtime getRuntime maxMemory)
+  (let [memory-max   (max-memory)
         memory-used  (reduce + (map expected-memory-usage state))
         memory-limit (quot memory-max 2)]
     (if (< memory-used memory-limit)
@@ -314,7 +319,7 @@ Options:
 
 (defn read-handle
   "Reads packets from the handle"
-  [^PcapHandle handle port verbose count duration sink]
+  [^PcapHandle handle sink & [{:keys [port verbose count duration]}]]
   {:pre [(or (nil? count) (pos? count))]}
   (let [logger   #(log/infof "Processed %d packet(s)" %)
         duration (some-> duration (* 1000))
@@ -348,19 +353,22 @@ Options:
 
 (defn read-pcap-file
   "Loads pcap file into in-memory h2 database"
-  [file-name sink & {:keys [port verbose count duration]}]
+  [file-name sink options]
   (with-open [handle (pcap/file-handle file-name)]
-    (read-handle handle port verbose count duration sink)))
+    (read-handle handle sink options)))
 
 (defn read-net-interface
   "Captures packets from the interface and loads into the database"
-  [interface sink & {:keys [port verbose count duration]}]
+  [interface sink options]
   (with-open [handle (pcap/live-handle interface hbase-ports)]
-    (when tty? (log/info "Press enter key to stop capturing"))
-    (let [f (future (read-handle handle port verbose count duration sink))]
-      (if duration
+    (let [f (future (read-handle handle sink options))]
+      (if-let [duration (:duration options)]
         (Thread/sleep (* 1000 duration))
-        (if tty? (read-line) (deref f)))
+        (if tty?
+          (do
+            (log/info "Press enter key to stop capturing")
+            (read-line))
+          (deref f)))
       (log/info "Closing the handle")
       (future-cancel f)
       (try @f (catch CancellationException _)))
@@ -378,7 +386,7 @@ Options:
             "Cannot select device as stdin is not tty. Use --interface option.")))
   (pcap/select-interface))
 
-(defn- print-usage!
+(defn print-usage!
   "Prints usage and terminates the program"
   ([status extra]
    (println extra)
@@ -422,21 +430,25 @@ Options:
       (db/start-shell connection)
       (.stop ^org.h2.tools.Server server))))
 
-(defn -main
-  [& args]
-  (let [{:keys [options arguments errors]} (parse-opts args cli-options)
-        {:keys [port verbose count duration interface kafka help]} options]
+(defn parse-opts!
+  "Parses arguments and terminates the program when an error is found"
+  [args]
+  (let [{:keys [options arguments errors] :as parse-result} (cli/parse-opts args cli-options)
+        {:keys [count duration interface kafka help]} options]
     (cond
       help   (print-usage! 0)
       errors (print-usage! 1 (first errors))
-      (and interface (seq arguments)) (print-usage! 1))
+      (and interface (seq arguments)) (print-usage! 1)
 
-    (when-not (or kafka tty? count duration)
-      (throw (IllegalArgumentException.
-              "Cannot load data into in-memory database indefinitely")))
+      (every? not [kafka tty? count duration])
+      (print-usage! 1 "Cannot load data into in-memory database indefinitely"))
+    parse-result))
 
-    (let [options [:port port :verbose verbose :count count :duration duration]
-          with-sink* (if kafka with-kafka* with-db*)]
+(defn -main
+  [& args]
+  (let [{:keys [options arguments errors]} (parse-opts! args)
+        {:keys [port verbose count duration interface kafka help]} options]
+    (let [with-sink* (if kafka with-kafka* with-db*)]
       (try
         (with-sink*
           (fn [sink]
@@ -444,12 +456,12 @@ Options:
               ;; From files
               (doseq [file arguments]
                 (log/info "Loading" file)
-                (apply read-pcap-file file sink options))
+                (read-pcap-file file sink options))
               ;; From a live capture
-              (apply read-net-interface
-                     (or interface (select-nif) (System/exit 1))
-                     sink
-                     options))))
+              (read-net-interface
+               (or interface (select-nif) (System/exit 1))
+               sink
+               options))))
         (catch Exception e
           (log/error e))))
 

@@ -1,5 +1,6 @@
 (ns hbase-packet-inspector.hbase-test
   (:require [clojure.test :refer :all]
+            [hbase-packet-inspector.core :as core]
             [hbase-packet-inspector.hbase :as hbase])
   (:import (com.google.protobuf ByteString MessageLite InvalidProtocolBufferException)
            (java.io ByteArrayInputStream ByteArrayOutputStream)
@@ -118,7 +119,8 @@
 (deftest test-parse-response
   (testing "multi"
     (is (= {:method  :multi
-            :actions [{:foo :bar, :cells 12, :exception nil}
+            :actions [{:foo :bar} {:FOO :BAR}]
+            :results [{:foo :bar, :cells 12, :exception nil}
                       {:FOO :BAR, :cells nil, :exception "foo"}]
             :call-id 100
             :error   "error-class"
@@ -367,19 +369,32 @@
                  (parse-request "1234" 100 (make-get-request))))))
 
 (deftest test-parse-stream
-  (is (= {:method :get
-          :call-id 100
-          :table table-name
-          :region encoded-name
-          :row "rowkey"
-          :cells 6}
-         (hbase/parse-stream true (->bais (make-request-header "GET" 100)
-                                          (make-get-request)) nil)))
-  (is (= {:method :get
-          :extra :data
-          :call-id 100
-          :error "error-class"
-          :cells 12}
-         (hbase/parse-stream false (->bais (make-response-header 100)
-                                           (make-get-response 10 2))
-                             {100 {:method :get :extra :data}}))))
+  (testing "hbase/parse-stream"
+    (is (= {:method :get
+            :call-id 100
+            :table table-name
+            :region encoded-name
+            :row "rowkey"
+            :cells 6}
+           (hbase/parse-stream true (->bais (make-request-header "GET" 100)
+                                            (make-get-request)) nil)))
+    (is (= {:method :get
+            :extra :data
+            :call-id 100
+            :error "error-class"
+            :cells 12}
+           (hbase/parse-stream false (->bais (make-response-header 100)
+                                             (make-get-response 10 2))
+                               {100 {:method :get :extra :data}}))))
+
+  (testing "core/parse-stream"
+    ;; Basically does the same, but takes additional total-size argument
+    (is (= {:method :get
+            :call-id 100
+            :table table-name
+            :region encoded-name
+            :row "rowkey"
+            :cells 6
+            :size 9999}
+           (core/parse-stream true (->bais (make-request-header "GET" 100)
+                                           (make-get-request)) 9999 nil)))))

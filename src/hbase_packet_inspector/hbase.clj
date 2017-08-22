@@ -57,8 +57,14 @@
                                    (.. result getCellList size)))
                    :exception (when exception?
                                 (some-> result-or-exception .getException .getName))})]
+    ;; TODO:
+    ;; 1. (.getProcessed response) for check-and-*** methods is valuable
+    ;;    information but is currently not used
+    ;; 2. On checked mutations, results can be empty and
+    ;;    (map merge actions results) results an empty list.
     {:cells   (reduce + (filter some? (map :cells results)))
-     :actions (map merge actions results)}))
+     :actions actions
+     :results (map merge actions results)}))
 
 (defn parse-response
   "Processes response to client. Uses request-finder to find the request map for
@@ -146,30 +152,30 @@
 
 (defn parse-mutation
   "Parses MutationProto"
-  [^ClientProtos$MutationProto mutation]
-  {:method     (->keyword (.. mutation getMutateType name))
-   :row        (->string-binary (.. mutation getRow))
-   :cells      (+ (.. mutation getAssociatedCellCount)
-                  (count (mapcat #(.getQualifierValueList ^ClientProtos$MutationProto$ColumnValue %)
-                                 (.. mutation getColumnValueList))))
-   :durability (.. mutation getDurability name toLowerCase)})
+  [^ClientProtos$MutationProto mutation condition?]
+  (let [method (->keyword (.. mutation getMutateType name))]
+    {:method     (if condition?
+                   (keyword (str "check-and-" (name method)))
+                   method)
+     :row        (->string-binary (.. mutation getRow))
+     :cells      (+ (.. mutation getAssociatedCellCount)
+                    (count (mapcat #(.getQualifierValueList ^ClientProtos$MutationProto$ColumnValue %)
+                                   (.. mutation getColumnValueList))))
+     :durability (.. mutation getDurability name toLowerCase)}))
 
 (defn parse-mutate-request
   "Parses MutateRequest"
   [^ClientProtos$MutateRequest request]
-  (let [base   (parse-mutation (.. request getMutation))
-        method (:method base)
-        method (if (.. request hasCondition)
-                 (keyword (str "check-and-" (name method)))
-                 method)]
+  (let [base (parse-mutation (.. request getMutation)
+                             (.. request hasCondition))]
     (merge base
-           {:method method}
            (parse-region-name (.. request getRegion getValue)))))
 
 (defn parse-multi-request
   "Parses MultiRequest and returns the list of actions"
   [^ClientProtos$MultiRequest multi-request]
-  (let [region-actions (.. multi-request getRegionActionList)]
+  (let [region-actions (.. multi-request getRegionActionList)
+        condition?     (.. multi-request hasCondition)]
     (for [^ClientProtos$RegionAction region-action region-actions
           ^ClientProtos$Action action (.. region-action getActionList)
           :let [region (parse-region-name (.. region-action getRegion getValue))]]
@@ -177,7 +183,7 @@
        (if (.hasGet action)
          {:method :get
           :row    (->string-binary (.. action getGet getRow))}
-         (parse-mutation (.. action getMutation)))
+         (parse-mutation (.. action getMutation) condition?))
        region))))
 
 (defn parse-bulk-load-hfile-request
