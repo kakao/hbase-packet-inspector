@@ -1,13 +1,16 @@
 # hbase-packet-inspector
 
-hbase-packet-inspector analyzes packets to/from HBase region server and builds
-an in-memory database. You can query the database in the command-line shell or
-via its web SQL interface.
+_hbase-packet-inspector_ is a command-line tool for analyzing network traffic
+of HBase RegionServers.
+
+It reads tcpdump files or captures live stream of packets of a network
+interface to extract the information on client requests and responses.
+
+You can configure it to load the obtained information either to its in-memory
+database, which you can access via command-line and web-based SQL interface,
+or to a remote Kafka cluster.
 
 ## Usage
-
-hbase-packet-inspector can read tcpdump output files or a live capture from a
-network interface (the latter requires root permission).
 
 ```
 Usage:
@@ -22,34 +25,35 @@ Options:
   -d --duration=DURATION    Number of seconds to capture packets
   -k --kafka=SERVERS/TOPIC  Kafka bootstrap servers and the name of the topic
                               TOPIC:
-                                T:     Both requests and responses to T
-                                T1/T2: Requests to T1, responses to T2
-                                T/:    Requests to T, responses are ignored
-                                /T:    Requests are ignored, responses to T
+                                T      Both requests and responses to T
+                                T1/T2  Requests to T1, responses to T2
+                                T/     Requests to T, responses are ignored
+                                /T     Requests are ignored, responses to T
   -v --verbose              Verbose output
 ```
 
-If `--kafka` option is used, hbase-packet-inspector will send records for
-`requests` and `responses` table to the specified Kafka cluster as json
-records, instead of creating in-memory database.
+When file arguments are not given, hbase-packet-inspector will capture live
+stream of packets from a network interface (root permission is required). It
+will continue until a specified time has passed (`--duration`), or a certain
+number of packets have been processed (`--count`), or the user interrupted it
+by pressing enter key. Then it will launch command-line and web-based SQL
+interfaces so you can analyze the results using SQL.
 
-You can send additional key-value pairs to Kafka as follows:
+### Examples
+
+`hbase-packet-inspector` is an executable JAR file, but you can directly run
+it once you set the executable flag.
 
 ```sh
---kafka "bootstrap1:9092,bootstrap2:9092/hbase-packets?service=twitter&cluster=feed"
-```
+# Setting the executable flag
+chmod +x hbase-packet-inspector
+./hbase-packet-inspector --help
 
-## Example
-
-```sh
 # Reading from tcpdump output
-tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
+sudo tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
 ./hbase-packet-inspector dump.pcap
 
-# Use readline wrapper
-rlwrap ./hbase-packet-inspector dump.pcap
-
-# Reading from a live capture; captures the packets until you press enter
+# Capturing live stream of packets; continues until you press enter
 sudo ./hbase-packet-inspector
 ```
 
@@ -59,18 +63,42 @@ Alternatively, you can start it with java command to pass extra JVM options.
 java -Xmx2g -jar hbase-packet-inspector --help
 ```
 
-## Schema
+### Kafka
 
-- requests
+Since the size of memory is limited, you'll have to interrupt the live capture
+at a certain point of time to avoid OOM. But if you want to keep
+hbase-packet-inspector alive to monitor the traffic for longer periods of
+time, you can make it send records to a remote Kakfa cluster in JSON format
+instead of building the in-memory database.
+
+```sh
+# Both requests and responses are sent to hbase-traffic topic.
+# - See boolean "inbound?" field to differentiate two types of records
+hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-traffic"
+
+# Requests to hbase-requests, responses to hbase-responses
+hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-requests/hbase-responses"
+
+# Only requests to hbase-requests
+hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-requests/"
+
+# Only responses to hbase-requests
+hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092//hbase-requests"
+
+# Additional key-value pairs to be included in each record
+hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-traffic?service=twitter&cluster=feed"
+```
+
+## Database schema
+
+- requests (client requests)
     - actions (for multi requests)
-- responses
+- responses (server response)
     - results (for multi responses)
 
 Note that `call_id` is not globally unique nor monotonically increasing. Join
 between the tables should be performed on (`client`, `port`, `call_id`)
 columns.
-
-Currently, only records for `responses` table can be sent to Kafka.
 
 ## Build
 
@@ -79,7 +107,9 @@ Currently, only records for `responses` table can be sent to Kafka.
 lein bin
 ```
 
-## Test
+## Development
+
+### Test
 
 ```sh
 lein test
@@ -88,7 +118,7 @@ lein test
 lein cloverage
 ```
 
-### Generating fixtures
+#### Generating fixtures
 
 Some of the test cases read actual tcpdump output files for a predefined
 series of HBase client operations. They were generated by running
@@ -99,6 +129,49 @@ container built with the included [Dockerfile](Dockerfile).
 docker build -t hpi-test-env .
 docker run -v $(PWD)/dev-resources:/data -it hpi-test-env /data/generate-fixtures.sh
 ```
+
+### Testing functions on REPL
+
+Familiarize yourself with the way hbase-packet-inspector works by trying out
+the following snippet on Clojure REPL (`lein repl`).
+
+```clojure
+(ns user
+  (:require [hbase-packet-inspector.core :as core]
+            [hbase-packet-inspector.sink.db :as db]
+            [hbase-packet-inspector.sink.kafka :as kafka]
+            [clojure.java.io :as io]
+            [clojure.tools.logging :as log]
+            [clojure.java.jdbc :as jdbc]))
+
+;;; Log records parsed from tcpdump output file
+(core/read-pcap-file
+ (.getPath (io/resource "scan.pcap"))
+ #(log/info %)
+ {:port 16201})
+
+;;; Load records into H2 in-memory database
+(def connection
+  (doto (db/connect) db/create))
+
+(core/read-pcap-file
+ (.getPath (io/resource "scan.pcap"))
+ (db/sink-fn connection)
+ {:port 16201})
+
+(jdbc/query {:connection connection} "select count(*) from requests")
+
+;;; See how records are sent to Kafka
+(core/read-pcap-file
+  (.getPath (io/resource "randomRead.pcap"))
+  #(log/info (.value (kafka/make-record "hbase-packets" %)))
+  {:port 16201})
+```
+
+## Limitation
+
+hbase-packet-inspector is not guaranteed to capture the precise statistics of
+HBase workload due to packet drops, connection losses, etc.
 
 ## License
 

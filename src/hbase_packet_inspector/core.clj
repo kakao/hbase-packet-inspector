@@ -36,10 +36,10 @@ Options:
   -d --duration=DURATION    Number of seconds to capture packets
   -k --kafka=SERVERS/TOPIC  Kafka bootstrap servers and the name of the topic
                               TOPIC:
-                                T:     Both requests and responses to T
-                                T1/T2: Requests to T1, responses to T2
-                                T/:    Requests to T, responses are ignored
-                                /T:    Requests are ignored, responses to T
+                                T      Both requests and responses to T
+                                T1/T2  Requests to T1, responses to T2
+                                T/     Requests to T, responses are ignored
+                                /T     Requests are ignored, responses to T
   -v --verbose              Verbose output")
 
 (def cli-options
