@@ -91,14 +91,64 @@ hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-traffic?se
 
 ## Database schema
 
-- requests (client requests)
-    - actions (for multi requests)
-- responses (server response)
-    - results (for multi responses)
+### Requests (client requests)
 
-Note that `call_id` is not globally unique nor monotonically increasing. Join
-between the tables should be performed on (`client`, `port`, `call_id`)
-columns.
+| Column     | Data type | Description                                                      |
+| ---------- | --------- | ---------------------------------------------------------------- |
+| ts         | timestamp | Event timestamp                                                  |
+| client     | varchar   | Client IP address                                                |
+| port       | int       | Client port                                                      |
+| call_id    | int       | Call ID                                                          |
+| server     | varchar   | Server IP address                                                |
+| type       | varchar   | Request type (e.g. `get`, `put`, ...)                            |
+| size       | int       | Byte size of the request                                         |
+| batch      | int       | Number of actions in batch request. Null if not a batch request. |
+| table      | varchar   | Table name                                                       |
+| region     | varchar   | Encoded region name                                              |
+| row        | varchar   | Row key or start row key for a scan                              |
+| stoprow    | varchar   | Stop row key for a scan                                          |
+| cells      | int       | Number of cells attached                                         |
+| durability | varchar   | Durability mode                                                  |
+
+- `row` and `stoprow` columns are stored as human-readable versions of the
+  original byte arrays obtained by applying `Bytes.toStringBinary`.
+- `call_id` is not globally unique nor monotonically increasing. Join
+  between the tables should be performed on [`client`, `port`, `call_id`]
+  columns.
+
+### Actions (for multi requests)
+
+A batch/multi request can consist of multiple actions of different types.
+Embedded as `actions` array when sent to Kafka as JSON record.
+
+| Column     | Data type | Description              |
+| ---------- | --------- | ------------------------ |
+| client     | varchar   | Client IP address        |
+| port       | int       | Client port              |
+| call_id    | int       | Call ID                  |
+| type       | varchar   | Request type             |
+| table      | varchar   | Table name               |
+| region     | varchar   | Encoded region name      |
+| row        | varchar   | Row key                  |
+| cells      | int       | Number of cells attached |
+| durability | varchar   | Duarbility mode          |
+
+### Responses (server response)
+
+Same as `requests`, but with the following additional columns:
+
+| Column  | Data type | Description                   |
+| ------- | --------- | ----------------------------- |
+| error   | varchar   | Exception. Null if succeeded. |
+| elapsed | int       | Elapsed time in millisecond   |
+
+- `elapsed` is measured as the difference between the timestamp of a request
+  and that of the matching response.
+
+#### Results (for multi responses)
+
+Same as `actions`, but with `error` column. Embedded as `results` array when
+sent to Kafka as JSON record.
 
 ## Build
 
