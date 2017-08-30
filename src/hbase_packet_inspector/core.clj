@@ -448,7 +448,7 @@ Options:
   [& args]
   (let [{:keys [options arguments errors]} (parse-opts! args)
         {:keys [port verbose count duration interface kafka help]} options]
-    (let [with-sink* (if kafka with-kafka* with-db*)]
+    (let [with-sink* (if kafka (partial with-kafka* kafka) with-db*)]
       (try
         (with-sink*
           (fn [sink]
