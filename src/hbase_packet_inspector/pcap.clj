@@ -17,7 +17,8 @@
   "Opens PcapHandle for the interface. Requires root permission."
   ^PcapHandle [interface ports]
   (let [handle (.. (PcapHandle$Builder. interface)
-                   (snaplen (* 1024 64))
+                   (snaplen    (* 64 1024))
+                   (bufferSize (* 128 1024 1024))
                    (promiscuousMode PcapNetworkInterface$PromiscuousMode/NONPROMISCUOUS)
                    (timeoutMillis 1000)
                    build)]
