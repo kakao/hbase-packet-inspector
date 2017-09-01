@@ -317,14 +317,21 @@ Options:
 
 (def trim-state (comp trim-state-by-memory trim-state-expired))
 
+(defn logger
+  [count stats]
+  (let [stats-str
+        (when (seq stats)
+          (str " (" (str/join ", " (for [[k v] stats]
+                                     (str (name k) ": " v))) ")"))]
+    (log/infof (str "Processed %d packets" stats-str) count)))
+
 (defn start-handler
   "Starts a background thread for parsing and interpreting HBase requests and
   responses"
-  [chan close-chan sink {:keys [port verbose count duration]}]
+  [chan close-chan sink stats-fn {:keys [port verbose count duration]}]
   {:pre [(or (nil? count) (pos? count))]}
   (async/thread
-    (let [logger   #(log/infof "Processed %d packet(s)" %)
-          sink     (partial send! sink verbose)
+    (let [sink     (partial send! sink verbose)
           duration (some-> duration (* 1000))
           ports    (if port (hash-set port) hbase-ports)]
       (loop [state    {}
@@ -344,11 +351,12 @@ Options:
                   print?    (or (>= tdiff (:ms report-interval))
                                 (>= diff  (:count report-interval)))]
               (when print?
-                (logger seen))
+                (logger seen (stats-fn)))
               (if (and (or (nil? count) (< seen count))
                        (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
                 (if print?
-                  (recur (trim-state new-state latest-ts) first-ts seen {:seen seen :ts now})
+                  (recur (trim-state new-state latest-ts)
+                         first-ts seen {:seen seen :ts now})
                   (recur new-state first-ts seen prev))
                 (do (async/close! chan) ;; No more puts
                     (async/alts!! [chan (async/timeout 100)])
@@ -356,16 +364,16 @@ Options:
 
 (defn read-handle
   "Reads packets from the handle and passes each packet to handler thread"
-  [^PcapHandle handle sink & [options]]
+  [^PcapHandle handle sink stats-fn & [options]]
   (let [chan (async/chan 10000)
         close-chan (async/chan)]
-    (start-handler chan close-chan sink options)
+    (start-handler chan close-chan sink stats-fn options)
     (loop []
       (let [packet-map (pcap/parse-next-packet handle)]
         (case packet-map
           ::pcap/interrupt
           (do (async/>!! chan [])
-              (log/infof "Finished processing %d packet(s)"
+              (log/infof "Finished processing %d packets"
                          (async/<!! close-chan)))
 
           ::pcap/ignore
@@ -378,13 +386,16 @@ Options:
   "Loads pcap file into in-memory h2 database"
   [file-name sink options]
   (with-open [handle (pcap/file-handle file-name)]
-    (read-handle handle sink options)))
+    (read-handle handle sink (constantly {}) options)))
 
 (defn read-net-interface
   "Captures packets from the interface and loads into the database"
   [interface sink options]
   (with-open [handle (pcap/live-handle interface hbase-ports)]
-    (let [f (future (read-handle handle sink options))]
+    (let [stats-fn #(let [stats (.getStats handle)]
+                      {:received (.getNumPacketsReceived stats)
+                       :dropped  (.getNumPacketsDropped stats)})
+          f (future (read-handle handle sink stats-fn options))]
       (if-let [duration (:duration options)]
         (Thread/sleep (* 1000 duration))
         (if tty?
@@ -397,7 +408,7 @@ Options:
       (try @f (catch CancellationException _)))
 
     (let [stats (.getStats handle)]
-      (log/infof "%d packet(s) received, %d dropped"
+      (log/infof "%d packets received, %d dropped"
                  (.getNumPacketsReceived stats)
                  (.getNumPacketsDropped stats)))))
 
