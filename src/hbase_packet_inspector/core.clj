@@ -1,5 +1,6 @@
 (ns hbase-packet-inspector.core
   (:require [cemerick.url :refer [query->map]]
+            [clojure.core.async :as async]
             [clojure.core.match :refer [match]]
             [clojure.string :as str]
             [clojure.tools.cli :as cli]
@@ -172,7 +173,8 @@ Options:
         inbound?       (some? (ports (-> packet-map :dst :port)))
         server         (packet-map (if inbound? :dst :src))
         client         (packet-map (if inbound? :src :dst))
-        client-state   (state [:client client])
+        client-key     [:client client]
+        client-state   (state client-key)
         request-finder (fn [call-id] (state [:call client call-id]))
         base-map       {:ts       timestamp
                         :inbound? inbound?
@@ -180,20 +182,18 @@ Options:
                         :client   (:addr client)
                         :port     (:port client)}
         next-state     (fn [parsed]
-                         (let [info (merge parsed base-map) ; mind the order
-                               {:keys [call-id]} info
-                               info (or (some->
-                                         (when-not inbound? (request-finder call-id))
-                                         :ts
-                                         (some->> (sub-ts timestamp)
-                                                  (assoc info :elapsed)))
-                                        info)
-                               [state info] (process-scan-state state client info)]
+                         ;; Only responses for known requests have previous :ts
+                         (let [prev-ts (:ts parsed)
+                               parsed (if prev-ts
+                                        (assoc parsed :elapsed (sub-ts timestamp prev-ts))
+                                        parsed)
+                               [state info] (process-scan-state state client (merge parsed base-map))
+                               state-key [:call client (:call-id parsed)]]
                            (proc-fn info)
                            (dissoc (if inbound?
-                                     (assoc state [:call client call-id] info)
-                                     (dissoc state [:call client call-id]))
-                                   [:client client])))]
+                                     (assoc state state-key info)
+                                     (dissoc state state-key))
+                                   client-key)))]
     (if-not (and data (some ports [(-> packet-map :src :port)
                                    (-> packet-map :dst :port)]))
       state
@@ -212,7 +212,7 @@ Options:
               (if (> total (- length 4))
                 (let [baos   (ByteArrayOutputStream.)
                       copied (ByteStreams/copy bais baos)]
-                  (assoc state [:client client]
+                  (assoc state client-key
                          {:ts timestamp :out baos :total total :remains (- total copied)}))
                 (next-state (parse-stream inbound? bais total request-finder)))))
 
@@ -222,7 +222,7 @@ Options:
                 copied  (ByteStreams/copy bais ^ByteArrayOutputStream out)
                 remains (- remains copied)]
             (if (pos? remains)
-              (assoc state [:client client]
+              (assoc state client-key
                      (assoc client-state :ts timestamp :remains remains))
               (let [ba   (.toByteArray ^ByteArrayOutputStream out)
                     bais (ByteArrayInputStream. ba)]
@@ -231,11 +231,11 @@ Options:
           (when-not (instance? InvalidProtocolBufferException e)
             (log/warn e))
           ;;; Discard byte stream for the client
-          (dissoc state [:client client]))))))
+          (dissoc state client-key))))))
 
 (defn send!
   "Sends request/response information into sink (H2 database or Kafka)"
-  [sink info verbose]
+  [sink verbose info]
   (let [{:keys [inbound? actions results client port call-id cells]} info
         batch  (count actions)
         multi? (> batch 1)
@@ -317,39 +317,62 @@ Options:
 
 (def trim-state (comp trim-state-by-memory trim-state-expired))
 
-(defn read-handle
-  "Reads packets from the handle"
-  [^PcapHandle handle sink & [{:keys [port verbose count duration]}]]
+(defn start-handler
+  "Starts a background thread for parsing and interpreting HBase requests and
+  responses"
+  [chan close-chan sink {:keys [port verbose count duration]}]
   {:pre [(or (nil? count) (pos? count))]}
-  (let [logger   #(log/infof "Processed %d packet(s)" %)
-        duration (some-> duration (* 1000))
-        ports    (if port (hash-set port) hbase-ports)]
-    (loop [state    {}
-           first-ts nil
-           seen     0
-           prev     {:seen 0 :ts (System/currentTimeMillis)}]
+  (async/thread
+    (let [logger   #(log/infof "Processed %d packet(s)" %)
+          sink     (partial send! sink verbose)
+          duration (some-> duration (* 1000))
+          ports    (if port (hash-set port) hbase-ports)]
+      (loop [state    {}
+             first-ts nil
+             seen     0
+             prev     {:seen 0 :ts (System/currentTimeMillis)}]
+        (let [[latest-ts packet-map] (async/<!! chan)]
+          (if (nil? latest-ts)
+            (async/>!! close-chan seen)
+            (let [first-ts  (or first-ts latest-ts)
+                  new-state (process-hbase-packet
+                             packet-map ports latest-ts state sink)
+                  now       (System/currentTimeMillis)
+                  seen      (inc seen)
+                  tdiff     (- now  (:ts   prev))
+                  diff      (- seen (:seen prev))
+                  print?    (or (>= tdiff (:ms report-interval))
+                                (>= diff  (:count report-interval)))]
+              (when print?
+                (logger seen))
+              (if (and (or (nil? count) (< seen count))
+                       (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
+                (if print?
+                  (recur (trim-state new-state latest-ts) first-ts seen {:seen seen :ts now})
+                  (recur new-state first-ts seen prev))
+                (do (async/close! chan) ;; No more puts
+                    (async/alts!! [chan (async/timeout 100)])
+                    (async/>!! close-chan seen))))))))))
+
+(defn read-handle
+  "Reads packets from the handle and passes each packet to handler thread"
+  [^PcapHandle handle sink & [options]]
+  (let [chan (async/chan 10000)
+        close-chan (async/chan)]
+    (start-handler chan close-chan sink options)
+    (loop []
       (let [packet-map (pcap/parse-next-packet handle)]
         (case packet-map
-          ::pcap/interrupt (logger seen)
-          ::pcap/ignore (recur state first-ts seen prev)
-          (let [latest-ts (.getTimestamp handle)
-                first-ts  (or first-ts latest-ts)
-                new-state (process-hbase-packet
-                           packet-map ports latest-ts state #(send! sink % verbose))
-                now       (System/currentTimeMillis)
-                seen      (inc seen)
-                tdiff     (- now  (:ts   prev))
-                diff      (- seen (:seen prev))
-                print?    (or (>= tdiff (:ms report-interval))
-                              (>= diff  (:count report-interval)))]
-            (when print?
-              (logger seen))
-            (if (and (or (nil? count) (< seen count))
-                     (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
-              (if print?
-                (recur (trim-state new-state latest-ts) first-ts seen {:seen seen :ts now})
-                (recur new-state first-ts seen prev))
-              (logger seen))))))))
+          ::pcap/interrupt
+          (do (async/>!! chan [])
+              (log/infof "Finished processing %d packet(s)"
+                         (async/<!! close-chan)))
+
+          ::pcap/ignore
+          (recur)
+
+          (when (async/>!! chan [(.getTimestamp handle) packet-map])
+            (recur)))))))
 
 (defn read-pcap-file
   "Loads pcap file into in-memory h2 database"

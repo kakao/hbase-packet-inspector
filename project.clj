@@ -3,6 +3,7 @@
   :url "http://github.com/kakao"
   :license {:name "Apache License 2.0"}
   :dependencies [[org.clojure/clojure "1.8.0"]
+                 [org.clojure/core.async "0.3.443"]
                  [org.clojure/core.match "0.3.0-alpha4"]
                  [org.clojure/tools.cli "0.3.5"]
                  [org.clojure/tools.logging "0.4.0"]
