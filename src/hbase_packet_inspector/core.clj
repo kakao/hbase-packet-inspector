@@ -140,6 +140,12 @@ Options:
   [^Timestamp ts2 ^Timestamp ts1]
   (- (.getTime ts2) (.getTime ts1)))
 
+(defn read-int4
+  "Reads 4-byte integer from the input stream"
+  [^ByteArrayInputStream bais]
+  (try (.. (DataInputStream. bais) readInt)
+       (catch EOFException _ 0)))
+
 (defn process-hbase-packet
   "Executes proc-fn with with the map parsed from a packet. Returns the new
   state for the next iteration. state map can have the following types of
@@ -169,52 +175,65 @@ Options:
 
   [packet-map ports timestamp state proc-fn]
   {:pre [(set? ports)]}
-  (let [{:keys         [data length]} packet-map
-        inbound?       (some? (ports (-> packet-map :dst :port)))
-        server         (packet-map (if inbound? :dst :src))
-        client         (packet-map (if inbound? :src :dst))
-        client-key     [:client client]
-        client-state   (state client-key)
-        request-finder (fn [call-id] (state [:call client call-id]))
-        base-map       {:ts       timestamp
-                        :inbound? inbound?
-                        :server   (:addr server)
-                        :client   (:addr client)
-                        :port     (:port client)}
-        next-state     (fn [parsed]
-                         ;; Only responses for known requests have previous :ts
-                         (let [prev-ts (:ts parsed)
-                               parsed (if prev-ts
-                                        (assoc parsed :elapsed (sub-ts timestamp prev-ts))
-                                        parsed)
-                               [state info] (process-scan-state state client (merge parsed base-map))
-                               state-key [:call client (:call-id parsed)]]
-                           (proc-fn info)
-                           (dissoc (if inbound?
-                                     (assoc state state-key info)
-                                     (dissoc state state-key))
-                                   client-key)))]
+  (let [{:keys [data length]} packet-map
+        inbound?      (some? (ports (-> packet-map :dst :port)))
+        server        (packet-map (if inbound? :dst :src))
+        client        (packet-map (if inbound? :src :dst))
+        client-key    [:client client]
+        client-state  (state client-key)
+        base-map      {:ts       timestamp
+                       :inbound? inbound?
+                       :server   (:addr server)
+                       :client   (:addr client)
+                       :port     (:port client)}
+        expects-more  (fn [state ^ByteArrayInputStream bais total]
+                        (let [baos   (ByteArrayOutputStream.)
+                              copied (ByteStreams/copy bais baos)]
+                          (assoc state client-key
+                                 {:ts timestamp :out baos :total total :remains (- total copied)})))
+        next-state    (fn [state parsed]
+                        ;; Only responses for known requests have previous :ts
+                        (let [prev-ts (:ts parsed)
+                              parsed (if prev-ts
+                                       (assoc parsed :elapsed (sub-ts timestamp prev-ts))
+                                       parsed)
+                              [state info] (process-scan-state state client (merge parsed base-map))
+                              state-key [:call client (:call-id parsed)]]
+                          (proc-fn info)
+                          (dissoc (if inbound?
+                                    (assoc state state-key info)
+                                    (dissoc state state-key))
+                                  client-key)))
+        advance-state (fn [state bais size remains]
+                        ;; A single packet may have multiple messages
+                        ;; TODO: test cases
+                        (let [request-finder (when-not inbound? #(state [:call client %]))
+                              parsed         (parse-stream inbound? bais size request-finder)
+                              state          (next-state state parsed)
+                              size           (if (pos? remains) (read-int4 bais) 0)
+                              remains        (- remains size 4)]
+                          (if (valid-length? size)
+                            (if (neg? remains)
+                              (expects-more state bais size)
+                              (recur state bais size remains))
+                            state)))]
     (if-not (and data (some ports [(-> packet-map :src :port)
                                    (-> packet-map :dst :port)]))
       state
       (try
         (if-not client-state
-          ;;; Initial encounter
+          ;; Initial encounter
           (let [bais  (ByteArrayInputStream. data)
-                total (try (.. (DataInputStream. bais) readInt)
-                           (catch EOFException _ 0))]
+                total (read-int4 bais)]
 
             (if-not (valid-length? total)
-              ;;; Uncovered packets (e.g. Preamble, SASL handshake,
-              ;;; ConnectionHeader) or fragmented payload whose header we
-              ;;; missed
+              ;; Uncovered packets (e.g. Preamble ("HBas" = 1212309875),
+              ;; SASL handshake, ConnectionHeader) or fragmented payload whose
+              ;; header we missed
               state
               (if (> total (- length 4))
-                (let [baos   (ByteArrayOutputStream.)
-                      copied (ByteStreams/copy bais baos)]
-                  (assoc state client-key
-                         {:ts timestamp :out baos :total total :remains (- total copied)}))
-                (next-state (parse-stream inbound? bais total request-finder)))))
+                (expects-more state bais total)
+                (advance-state state bais total (- length total 4)))))
 
           ;;; Continued fragment
           (let [{:keys  [out total remains]} client-state
@@ -226,7 +245,7 @@ Options:
                      (assoc client-state :ts timestamp :remains remains))
               (let [ba   (.toByteArray ^ByteArrayOutputStream out)
                     bais (ByteArrayInputStream. ba)]
-                (next-state (parse-stream inbound? bais total request-finder))))))
+                (advance-state state bais total (- length total 4))))))
         (catch Exception e
           (when-not (instance? InvalidProtocolBufferException e)
             (log/warn e))
