@@ -14,7 +14,11 @@
   (some-> (NifSelector.) .selectNetworkInterface .getName))
 
 (defn live-handle
-  "Opens PcapHandle for the interface. Requires root permission."
+  "Opens PcapHandle for the interface. Requires root permission.
+
+  Reference:
+  - https://serverfault.com/questions/447855/how-filter-only-keep-alive-packet-with-tcpdump
+  - https://stackoverflow.com/questions/11757477/understanding-tcpdump-filter-bit-masking"
   ^PcapHandle [interface ports]
   (let [handle (.. (PcapHandle$Builder. interface)
                    (snaplen    (* 64 1024))
@@ -23,7 +27,8 @@
                    (timeoutMillis 1000)
                    build)]
     (.setFilter handle
-                (str/join " or " (map (partial format "port %d") ports))
+                (format "(%s) and ip[2:2] - ((ip[0]&0xf)<<2) - ((tcp[12]&0xf0)>>2) > 0"
+                        (str/join " or " (map (partial format "port %d") ports)))
                 BpfProgram$BpfCompileMode/OPTIMIZE)
     handle))
 
