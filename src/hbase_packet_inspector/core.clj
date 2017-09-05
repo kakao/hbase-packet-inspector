@@ -146,6 +146,11 @@ Options:
   (try (.. (DataInputStream. bais) readInt)
        (catch EOFException _ 0)))
 
+(defn baos->bais
+  "Converts ByteArrayOutputStream to ByteArrayInputStream"
+  ^ByteArrayInputStream [^ByteArrayOutputStream baos]
+  (ByteArrayInputStream. (.toByteArray baos)))
+
 (defn process-hbase-packet
   "Executes proc-fn with with the map parsed from a packet. Returns the new
   state for the next iteration. state map can have the following types of
@@ -186,11 +191,11 @@ Options:
                        :server   (:addr server)
                        :client   (:addr client)
                        :port     (:port client)}
-        expects-more  (fn [state ^ByteArrayInputStream bais total]
+        expects-more  (fn [state ^ByteArrayInputStream bais size]
                         (let [baos   (ByteArrayOutputStream.)
                               copied (ByteStreams/copy bais baos)]
                           (assoc state client-key
-                                 {:ts timestamp :out baos :total total :remains (- total copied)})))
+                                 {:ts timestamp :out baos :size size :expects (- size copied)})))
         next-state    (fn [state parsed]
                         ;; Only responses for known requests have previous :ts
                         (let [prev-ts (:ts parsed)
@@ -223,29 +228,33 @@ Options:
       (try
         (if-not client-state
           ;; Initial encounter
-          (let [bais  (ByteArrayInputStream. data)
-                total (read-int4 bais)]
+          (let [bais    (ByteArrayInputStream. data)
+                size    (read-int4 bais)
+                remains (- length size 4)]
 
-            (if-not (valid-length? total)
+            (if-not (valid-length? size)
               ;; Uncovered packets (e.g. Preamble ("HBas" = 1212309875),
               ;; SASL handshake, ConnectionHeader) or fragmented payload whose
               ;; header we missed
               state
-              (if (> total (- length 4))
-                (expects-more state bais total)
-                (advance-state state bais total (- length total 4)))))
+              (if (neg? remains)
+                ;; Not ready. We need more data.
+                (expects-more state bais size)
+                ;; Data is now ready. We may have more data after the first
+                ;; message (remains > 0).
+                (advance-state state bais size remains))))
 
-          ;;; Continued fragment
-          (let [{:keys  [out total remains]} client-state
+          ;; Continued fragment -> append new bytes to ByteArrayOutputStream
+          (let [{:keys  [out size expects]} client-state
                 bais    (ByteArrayInputStream. data)
                 copied  (ByteStreams/copy bais ^ByteArrayOutputStream out)
-                remains (- remains copied)]
-            (if (pos? remains)
+                expects (- expects copied)]
+            (if (pos? expects)
+              ;; Still needs more
               (assoc state client-key
-                     (assoc client-state :ts timestamp :remains remains))
-              (let [ba   (.toByteArray ^ByteArrayOutputStream out)
-                    bais (ByteArrayInputStream. ba)]
-                (advance-state state bais total (- length total 4))))))
+                     (assoc client-state :ts timestamp :expects expects))
+              ;; Finally ready to advance state
+              (advance-state state (baos->bais out) size (- expects)))))
         (catch Exception e
           (when-not (instance? InvalidProtocolBufferException e)
             (log/warn e))
