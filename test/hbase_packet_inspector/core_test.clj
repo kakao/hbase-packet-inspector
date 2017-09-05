@@ -80,42 +80,42 @@
                         :inbound? false}
         [state7 _] (process-scan-state state6 client small-scan-res)
         [state8 unknown] (process-scan-state state7 client {:method :unknown})]
-    ;;; The call ID of open-scanner request is mapped to the request
+    ;; The call ID of open-scanner request is mapped to the request
     (is (contains? state1 [:scanner-for :alice 100]))
     (is (not (contains? state1 [:scanner 1000])))
     (is (= open-req (state1 [:scanner-for :alice 100])))
 
-    ;;; Scanner ID only becomes known on open-scanner response
-    ;;; We map scanner ID to the initial open-scanner request
+    ;; Scanner ID only becomes known on open-scanner response
+    ;; We map scanner ID to the initial open-scanner request
     (is (not (contains? state2 [:scanner-for :alice 100])))
     (is (contains? state2 [:scanner 1000]))
     (is (= open-req (state2 [:scanner 1000])))
 
-    ;;; The response and request are augmented with the initial open-scanner
-    ;;; request.
+    ;; The response and request are augmented with the initial open-scanner
+    ;; request.
     (is (every? next-req* [:region :table]))
     (is (every? next-res* [:region :table]))
 
-    ;;; next-rows only updates :ts
+    ;; next-rows only updates :ts
     (is (= 2016 (-> state2 first val :ts)))
     (is (= 2017 (-> state3 first val :ts)))
     (is (= 2018 (-> state4 first val :ts)))
     (is (apply = (map #(map (fn [[k v]] [k (dissoc v :ts)]) %)
                       [state4 state3 state2])))
 
-    ;;; close-scanner will remove scanner entry from the state
+    ;; close-scanner will remove scanner entry from the state
     (is (empty? state5))
 
-    ;;; Small scan state
+    ;; Small scan state
     (is (= 1 (count state6)))
     (is (contains? state6 [:scanner-for :alice 200]))
     (is (= "foo" (-> state6 vals first :table)))
     (is (= "bar" (-> state6 vals first :region)))
 
-    ;;; state is cleaned up after small-scan response
+    ;; state is cleaned up after small-scan response
     (is (empty? state7))
 
-    ;;; Unknown method shouldn't affect state
+    ;; Unknown method shouldn't affect state
     (is (= {:method :unknown} unknown))
     (is (empty? state8))))
 

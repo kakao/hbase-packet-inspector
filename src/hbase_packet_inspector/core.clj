@@ -106,11 +106,11 @@ Options:
         region-info (select-keys (state [:scanner scanner]) [:table :region])]
     (match [method inbound?]
 
-      ;;; 1. Remember Scan request for call-id
+      ;; 1. Remember Scan request for call-id
       [(:or :open-scanner :small-scan) true]
       [(assoc state [:scanner-for client call-id] parsed) parsed]
 
-      ;;; 2. Find Scan request for call-id and map it to the scanner-id
+      ;; 2. Find Scan request for call-id and map it to the scanner-id
       [:open-scanner false]
       (let [key     [:scanner-for client call-id]
             request (get state key)
@@ -118,17 +118,17 @@ Options:
             state   (assoc state [:scanner scanner] request)]
         [state parsed])
 
-      ;;; 3. Attach region info from the Scan request for the scanner-id
-      ;;;    and update timestamp of the scanner state
+      ;; 3. Attach region info from the Scan request for the scanner-id
+      ;;    and update timestamp of the scanner state
       [:next-rows _]
       [(update state [:scanner scanner] assoc :ts ts)
        (merge parsed region-info)]
 
-      ;;; 4. Discard Scan request from the state
+      ;; 4. Discard Scan request from the state
       [:close-scanner true]
       [(dissoc state [:scanner scanner]) (merge parsed region-info)]
 
-      ;;; State transition is simpler for small scans
+      ;; State transition is simpler for small scans
       [:small-scan false]
       (let [key [:scanner-for client call-id]]
         [(dissoc state key) parsed])
@@ -249,7 +249,7 @@ Options:
         (catch Exception e
           (when-not (instance? InvalidProtocolBufferException e)
             (log/warn e))
-          ;;; Discard byte stream for the client
+          ;; Discard byte stream for the client
           (dissoc state client-key))))))
 
 (defn send!

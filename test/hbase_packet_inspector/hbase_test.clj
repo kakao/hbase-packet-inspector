@@ -232,7 +232,7 @@
                     (setRegion region)
                     (setMutation (make-mutation mutate-type)))]
     (when has-condition
-      ;;; row, family, qualifier, compare_type, comparator
+      ;; row, family, qualifier, compare_type, comparator
       (.setCondition builder (.. (ClientProtos$Condition/newBuilder)
                                  (setRow (ByteString/copyFromUtf8 "rowkey"))
                                  (setFamily (ByteString/copyFromUtf8 "cf"))
