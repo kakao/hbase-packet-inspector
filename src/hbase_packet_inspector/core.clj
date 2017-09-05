@@ -206,7 +206,7 @@ Options:
                                   client-key)))
         advance-state (fn [state bais size remains]
                         ;; A single packet may have multiple messages
-                        ;; TODO: test cases
+                        ;;   e.g. Nagle's algorithm, Asynchbase
                         (let [request-finder (when-not inbound? #(state [:call client %]))
                               parsed         (parse-stream inbound? bais size request-finder)
                               state          (next-state state parsed)

@@ -291,6 +291,10 @@
         (is (> size (* record-size caching-size)))
         (is (= caching-size cells)))))
 
+  (testing "Multi-message packets"
+    (let [infos (read-fixture :deferredFlush)]
+      (is (= 2000 (count (filter #(-> % :method (= :increment)) infos))))))
+
   (testing "CAS"
     (doseq [[file method] {:increment      :increment
                            :append         :append

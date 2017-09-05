@@ -59,6 +59,10 @@ dump() {
     checkAndDelete)
       bin/hbase pe --nomapred --rows=100 checkAndDelete 1
       ;;
+    deferredFlush)
+      echo "create 't', 'd'" | bin/hbase shell
+      java -jar /data/asynchbase-client/target/uberjar/asynchbase-client-0.1.0-SNAPSHOT-standalone.jar
+      ;;
   esac
   sleep 2
   kill -2 "$(cat tcpdump.pid)"
@@ -72,3 +76,4 @@ dump append
 dump checkAndPut
 dump checkAndMutate
 dump checkAndDelete
+dump deferredFlush
