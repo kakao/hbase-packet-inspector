@@ -82,7 +82,7 @@
      request ; can be nil, but it's okay
      base
      (match [method]
-       [(:or :open-scanner :next-rows :close-scanner)]
+       [(:or :open-scanner :next-rows :close-scanner :small-scan)]
        (let [response (ClientProtos$ScanResponse/parseDelimitedFrom bais)]
          (parse-scan-response response))
 

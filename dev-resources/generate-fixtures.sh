@@ -60,8 +60,12 @@ dump() {
       bin/hbase pe --nomapred --rows=100 checkAndDelete 1
       ;;
     deferredFlush)
-      echo "create 't', 'd'" | bin/hbase shell
-      java -jar /data/asynchbase-client/target/uberjar/asynchbase-client-0.1.0-SNAPSHOT-standalone.jar
+      echo "create 't', 'd' unless list.include?('t')" | bin/hbase shell
+      java -jar /data/load-generator/target/uberjar/load-generator-0.1.0-SNAPSHOT-standalone.jar asynchbase
+      ;;
+    smallScan)
+      echo "create 't', 'd' unless list.include?('t')" | bin/hbase shell
+      java -jar /data/load-generator/target/uberjar/load-generator-0.1.0-SNAPSHOT-standalone.jar small-scan
       ;;
   esac
   sleep 2
@@ -77,3 +81,4 @@ dump checkAndPut
 dump checkAndMutate
 dump checkAndDelete
 dump deferredFlush
+dump smallScan

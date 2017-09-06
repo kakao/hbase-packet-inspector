@@ -295,6 +295,15 @@
     (let [infos (read-fixture :deferredFlush)]
       (is (= 2000 (count (filter #(-> % :method (= :increment)) infos))))))
 
+  (testing "Small-scan"
+    (let [infos (read-fixture :smallScan)]
+      (is (= 200
+             (->> infos
+                  (filter #(-> % ((juxt :table :method)) (= ["t" :small-scan])))
+                  (remove :inbound?)
+                  (map :cells)
+                  (reduce +))))))
+
   (testing "CAS"
     (doseq [[file method] {:increment      :increment
                            :append         :append
