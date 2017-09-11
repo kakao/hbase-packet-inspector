@@ -205,10 +205,12 @@ the following snippet on Clojure REPL (`lein repl`).
 (def connection
   (doto (db/connect) db/create))
 
-(core/read-pcap-file
- (.getPath (io/resource "scan.pcap"))
- (db/sink-fn connection)
- {:port 16201})
+(let [[load close] (db/load-and-close-fn connection)]
+  (core/read-pcap-file
+    (.getPath (io/resource "scan.pcap"))
+    load
+    {:port 16201})
+  (close))
 
 (jdbc/query {:connection connection} "select count(*) from requests")
 
@@ -219,10 +221,15 @@ the following snippet on Clojure REPL (`lein repl`).
   {:port 16201})
 ```
 
-## Limitation
+## Caveats
 
-hbase-packet-inspector is not guaranteed to capture the precise statistics of
-HBase workload due to packet drops, connection losses, etc.
+- If the rate of the packet stream exceeds the processing capacity of
+  hbase-packet-inspector, packets will be dropped, and it will not be able to
+  capture the precise statistics of the workload.
+- Please be aware that hbase-packet-inspector uses CPU for processing and
+  interpreting the packet stream, and it may affect the performance of the
+  RegionServer if it's already heavily loaded.
+    - hbase-packet-inspector will occupy up to `2 + min(2, floor(TOTAL_NUMBER_OF_CORES / 4))` cores
 
 ## License
 

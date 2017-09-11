@@ -1,6 +1,6 @@
 (ns hbase-packet-inspector.sink.kafka
   (:require [cheshire.core :as json]
-            [grouper.core :as grouper])
+            [hbase-packet-inspector.sink.common :refer [create-batch-pool]])
   (:import (java.util Properties)
            (org.apache.kafka.clients.producer KafkaProducer ProducerConfig
                                               ProducerRecord)))
@@ -56,7 +56,7 @@
 (defn send-fn
   "Returns send function for sending formatted record to the specified sender"
   [^ISender sender extra-pairs]
-  (fn [topic record]
+  (fn [[topic record]]
     (let [ts     (.getTime ^java.sql.Timestamp (:ts record))
           record (merge (assoc record :ts ts) extra-pairs)]
       (.send sender (make-record topic record)))))
@@ -67,17 +67,13 @@
   [bootstrap-servers topic1 topic2 & [extra-pairs]]
   (let [sender     (create-sender bootstrap-servers)
         send       (send-fn sender (merge {:hostname (hostname)} extra-pairs))
-        batch-pool (grouper/start!
-                    #(doseq [[topic record] %] (send topic record))
-                    :capacity 1000
-                    :interval 200
-                    :pool 2)]
+        batch-pool (create-batch-pool send)]
     [(fn [record]
        {:pre [(contains? record :inbound?)
               (contains? record :ts)]}
        (let [topic (if (:inbound? record) topic1 topic2)]
          (when (seq topic)
-           (grouper/submit! batch-pool [topic record]))))
+           (.submit batch-pool [topic record]))))
      (fn []
        (.close batch-pool)
        (.close sender))]))

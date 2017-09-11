@@ -486,11 +486,13 @@ Options:
   (let [connection (db/connect)]
     (log/info "Creating database schema")
     (db/create connection)
-    (process (db/sink-fn connection))
-    (let [{:keys [server url]} (db/start-web-server connection)]
-      (log/info "Started web server:" url)
-      (db/start-shell connection)
-      (.stop ^org.h2.tools.Server server))))
+    (let [[load close] (db/load-and-close-fn connection)]
+      (process load)
+      (close)
+      (let [{:keys [server url]} (db/start-web-server connection)]
+        (log/info "Started web server:" url)
+        (db/start-shell connection)
+        (.stop ^org.h2.tools.Server server)))))
 
 (defn parse-opts!
   "Parses arguments and terminates the program when an error is found"

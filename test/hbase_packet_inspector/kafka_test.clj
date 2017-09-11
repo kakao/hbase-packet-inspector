@@ -30,7 +30,7 @@
         send    (kafka/send-fn sender extra)
         topic   "t1"
         record  {:a :b :ts (java.sql.Timestamp. 100)}]
-    (send topic record)
+    (send [topic record])
     (.close sender)
     (is (= 2 (count @history)))
     (is (= "t1" (.topic ^ProducerRecord (first @history))))
