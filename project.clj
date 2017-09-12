@@ -20,7 +20,8 @@
                  [cheshire "5.8.0"]
                  [com.cemerick/url "0.1.1"]
                  [junegunn/grouper "0.1.1"]]
-  :plugins [[lein-bin "0.3.5"]]
+  :plugins [[lein-bin "0.3.5"]
+            [lein-cloverage "1.0.9"]]
   :bin {:bin-path "target"}
   :main hbase-packet-inspector.core
   :target-path "target/%s"
