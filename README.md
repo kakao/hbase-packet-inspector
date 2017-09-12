@@ -39,6 +39,8 @@ number of packets have been processed (`--count`), or the user interrupted it
 by pressing enter key. Then it will launch command-line and web-based SQL
 interfaces so you can analyze the results using SQL.
 
+![In-memory database](images/h2.png)
+
 ### Examples
 
 `hbase-packet-inspector` is an executable JAR file, but you can directly run
@@ -89,7 +91,20 @@ hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092//hbase-requests"
 hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-traffic?service=twitter&cluster=feed"
 ```
 
+Shipping the information to Kafka has the following benefits:
+
+- Data collection is no longer limited by the size of the physical memory of
+  the server.
+- You can monitor network traffic of multiple RegionServers at once and get
+  a better picture of the cluster activity.
+- You can build a sophisticated data pipeline using multiple Kafka consumers
+  as shown in the figure below.
+
+![Kafka example](images/kafka.png)
+
 ## Database schema
+
+![Database schema](images/schema.png)
 
 ### Requests (client requests)
 
@@ -145,7 +160,7 @@ Same as `requests`, but with the following additional columns:
 - `elapsed` is measured as the difference between the timestamp of a request
   and that of the matching response.
 
-#### Results (for multi responses)
+### Results (for multi responses)
 
 Same as `actions`, but with `error` column. Embedded as `results` array when
 sent to Kafka as JSON record.
