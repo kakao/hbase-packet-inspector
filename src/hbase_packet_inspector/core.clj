@@ -12,7 +12,7 @@
   (:import (com.google.common.io ByteStreams)
            (com.google.protobuf InvalidProtocolBufferException)
            (java.io ByteArrayInputStream ByteArrayOutputStream DataInputStream
-                    EOFException)
+                    EOFException SequenceInputStream)
            (java.sql Timestamp)
            (java.util.concurrent CancellationException)
            (org.pcap4j.core PcapHandle))
@@ -146,11 +146,6 @@ Options:
   (try (.. (DataInputStream. bais) readInt)
        (catch EOFException _ 0)))
 
-(defn baos->bais
-  "Converts ByteArrayOutputStream to ByteArrayInputStream"
-  ^ByteArrayInputStream [^ByteArrayOutputStream baos]
-  (ByteArrayInputStream. (.toByteArray baos)))
-
 (defn process-hbase-packet
   "Executes proc-fn with with the map parsed from a packet. Returns the new
   state for the next iteration. state map can have the following types of
@@ -191,11 +186,9 @@ Options:
                        :server   (:addr server)
                        :client   (:addr client)
                        :port     (:port client)}
-        expects-more  (fn [state ^ByteArrayInputStream bais size]
-                        (let [baos   (ByteArrayOutputStream.)
-                              copied (ByteStreams/copy bais baos)]
-                          (assoc state client-key
-                                 {:ts timestamp :out baos :size size :expects (- size copied)})))
+        expects-more  (fn [state ^ByteArrayInputStream bais size expects]
+                        (assoc state client-key
+                               {:ts timestamp :ins [bais] :size size :expects expects}))
         next-state    (fn [state parsed]
                         ;; Only responses for known requests have previous :ts
                         (let [prev-ts (:ts parsed)
@@ -219,7 +212,7 @@ Options:
                               remains        (- remains size 4)]
                           (if (valid-length? size)
                             (if (neg? remains)
-                              (expects-more state bais size)
+                              (expects-more state bais size (- remains))
                               (recur state bais size remains))
                             state)))]
     (if-not (and data (some ports [(-> packet-map :src :port)
@@ -239,22 +232,23 @@ Options:
               state
               (if (neg? remains)
                 ;; Not ready. We need more data.
-                (expects-more state bais size)
+                (expects-more state bais size (- size (- (count data) 4)))
                 ;; Data is now ready. We may have more data after the first
                 ;; message (remains > 0).
                 (advance-state state bais size remains))))
 
           ;; Continued fragment -> append new bytes to ByteArrayOutputStream
-          (let [{:keys  [out size expects]} client-state
+          (let [{:keys  [ins size expects]} client-state
                 bais    (ByteArrayInputStream. data)
-                copied  (ByteStreams/copy bais ^ByteArrayOutputStream out)
-                expects (- expects copied)]
+                ins     (conj ins bais)
+                expects (- expects (count data))]
             (if (pos? expects)
               ;; Still needs more
               (assoc state client-key
-                     (assoc client-state :ts timestamp :expects expects))
+                     (assoc client-state
+                            :ins ins :ts timestamp :expects expects))
               ;; Finally ready to advance state
-              (advance-state state (baos->bais out) size (- expects)))))
+              (advance-state state (SequenceInputStream. (java.util.Collections/enumeration ins)) size (- expects)))))
         (catch Exception e
           (when-not (instance? InvalidProtocolBufferException e)
             (log/warn e))
