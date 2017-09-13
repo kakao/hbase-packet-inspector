@@ -314,7 +314,7 @@
             :call-id 100
             :row "rowkey"
             :cells 13
-            :durability "use_default"
+            :durability :use_default
             :table   table-name
             :region  encoded-name}
            (parse-request "MUTATE" 100 (make-mutate-request "PUT" false)))))
@@ -324,7 +324,7 @@
             :call-id 100
             :row "rowkey"
             :cells 13
-            :durability "use_default"
+            :durability :use_default
             :table   table-name
             :region  encoded-name}
            (parse-request "MUTATE" 100 (make-mutate-request "DELETE" true)))))
@@ -340,13 +340,13 @@
                       {:method :put
                        :row "rowkey"
                        :cells 13
-                       :durability "use_default"
+                       :durability :use_default
                        :table "<tablename>"
                        :region "1505983556"}
                       {:method :delete
                        :row "rowkey"
                        :cells 13
-                       :durability "use_default"
+                       :durability :use_default
                        :table "<tablename>"
                        :region "1505983556"}]}
            (parse-request "MULTI" 100 (make-multi-request)))))

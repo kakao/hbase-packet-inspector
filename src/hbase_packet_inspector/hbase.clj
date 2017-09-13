@@ -15,6 +15,8 @@
                                                        ClientProtos$MutateRequest
                                                        ClientProtos$MutationProto
                                                        ClientProtos$MutationProto$ColumnValue
+                                                       ClientProtos$MutationProto$Durability
+                                                       ClientProtos$MutationProto$MutationType
                                                        ClientProtos$RegionAction
                                                        ClientProtos$RegionActionResult
                                                        ClientProtos$ResultOrException
@@ -141,14 +143,26 @@
                      :row     (->string-binary (.. scan getStartRow))
                      :stoprow (->string-binary (.. scan getStopRow))})))))
 
-(defn ->keyword
-  "Converts CamelCase string to lower-case keyword"
+(defn- ->keyword*
   [s]
   (-> s
       (str/replace #"([a-z])([A-Z])"
                    (fn [[_ a b]] (str a "-" (str/lower-case b))))
       str/lower-case
       keyword))
+
+(def ^:private known-keywords
+  (let [strs (into ["Get" "Mutate" "Scan" "BulkLoadHFile" "CoprocessorService" "Multi"]
+                   (for [klass [ClientProtos$MutationProto$Durability
+                                ClientProtos$MutationProto$MutationType]
+                         ^java.lang.Enum enum (java.util.EnumSet/allOf klass)]
+                     (.name enum)))]
+    (into {} (for [str strs] [str (->keyword* str)]))))
+
+(defn ->keyword
+  "Converts CamelCase string to lower-case keyword"
+  [s]
+  (or (known-keywords s) (->keyword* s)))
 
 (defn parse-mutation
   "Parses MutationProto"
@@ -161,7 +175,7 @@
      :cells      (+ (.. mutation getAssociatedCellCount)
                     (reduce + (map #(count (.getQualifierValueList ^ClientProtos$MutationProto$ColumnValue %))
                                    (.. mutation getColumnValueList))))
-     :durability (.. mutation getDurability name toLowerCase)}))
+     :durability (->keyword (.. mutation getDurability name))}))
 
 (defn parse-mutate-request
   "Parses MutateRequest"
