@@ -13,7 +13,7 @@
                            [:port       "int"]
                            [:call_id    "int"]
                            [:server     "varchar"]
-                           [:type       "varchar"]
+                           [:method     "varchar"]
                            [:size       "int"]
                            [:batch      "int"]
                            [:table      "varchar"]
@@ -25,7 +25,7 @@
                 :actions  [[:client     "varchar"]
                            [:port       "int"]
                            [:call_id    "int"]
-                           [:type       "varchar"]
+                           [:method     "varchar"]
                            [:table      "varchar"]
                            [:region     "varchar"]
                            [:row        "varchar"]
@@ -54,7 +54,6 @@
 (let [fields (into {} (for [[table specs] schema]
                         [table (mapv #(-> % first name
                                           (str/replace "_" "-")
-                                          (str/replace "type" "method")
                                           keyword) specs)]))
       fields-with-index (into {} (for [[table columns] fields]
                                    [table (map vector (iterate inc 1) columns)]))]

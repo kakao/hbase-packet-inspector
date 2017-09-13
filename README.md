@@ -115,7 +115,7 @@ Shipping the information to Kafka has the following benefits:
 | port       | int       | Client port                                                      |
 | call_id    | int       | Call ID                                                          |
 | server     | varchar   | Server IP address                                                |
-| type       | varchar   | Request type (e.g. `get`, `put`, ...)                            |
+| method     | varchar   | Request type (e.g. `get`, `put`, ...)                            |
 | size       | int       | Byte size of the request                                         |
 | batch      | int       | Number of actions in batch request. Null if not a batch request. |
 | table      | varchar   | Table name                                                       |
@@ -141,7 +141,7 @@ Embedded as `actions` array when sent to Kafka as JSON record.
 | client     | varchar   | Client IP address        |
 | port       | int       | Client port              |
 | call_id    | int       | Call ID                  |
-| type       | varchar   | Request type             |
+| method     | varchar   | Request type             |
 | table      | varchar   | Table name               |
 | region     | varchar   | Encoded region name      |
 | row        | varchar   | Row key                  |
