@@ -70,7 +70,7 @@ java -Xmx2g -jar hbase-packet-inspector --help
 Since the size of memory is limited, you'll have to interrupt the live capture
 at a certain point of time to avoid OOM. But if you want to keep
 hbase-packet-inspector alive to monitor the traffic for longer periods of
-time, you can make it send records to a remote Kakfa cluster in JSON format
+time, you can make it send records to a remote Kafka cluster in JSON format
 instead of building the in-memory database.
 
 ```sh
