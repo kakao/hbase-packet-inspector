@@ -1,5 +1,4 @@
-#!/bin/bash
-# docker run -v $(PWD)/test/fixtures:/data -p 16010:16010 -it hpi-test-env
+#!/usr/bin/env bash
 
 set -e
 
