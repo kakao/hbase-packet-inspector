@@ -139,6 +139,8 @@
   (is (thrown? IllegalArgumentException (parse-kafka-spec "foo,bar//")))
   (is (= {:servers "foo,bar" :topic1 "t" :topic2 "t" :extra-pairs nil}
          (parse-kafka-spec "foo,bar/t")))
+  (is (= {:servers "foo,bar" :topic1 "t" :topic2 "t" :extra-pairs {"a" "b" "c" "d"}}
+         (parse-kafka-spec "foo,bar/t?a=b&c=d")))
   (is (= {:servers "foo,bar" :topic1 "t" :topic2 "" :extra-pairs nil}
          (parse-kafka-spec "foo,bar/t/")))
   (is (= {:servers "foo,bar" :topic1 "" :topic2 "t" :extra-pairs nil}

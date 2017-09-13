@@ -455,7 +455,7 @@ Options:
   "Parses --kafka option"
   [kafka-spec]
   (let [[_ servers topic1 topic2 query]
-        (re-matches #"^([^/]+)/([^/]*)(?:/([^/]*?))?(?:\?(.*))?$" kafka-spec)
+        (re-matches #"^([^/]+)/([^/]*?)(?:/([^/]*?))?(?:\?(.*))?$" kafka-spec)
         extra-pairs (query->map query)]
     (when (or (nil? servers) (every? nil? (map seq [topic1 topic2])))
       (throw (IllegalArgumentException. "Invalid Kafka spec")))
