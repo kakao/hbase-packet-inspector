@@ -173,7 +173,7 @@
                    method)
      :row        (->string-binary (.. mutation getRow))
      :cells      (+ (.. mutation getAssociatedCellCount)
-                    (reduce + (map #(count (.getQualifierValueList ^ClientProtos$MutationProto$ColumnValue %))
+                    (reduce + (map #(.getQualifierValueCount ^ClientProtos$MutationProto$ColumnValue %)
                                    (.. mutation getColumnValueList))))
      :durability (->keyword (.. mutation getDurability name))}))
 
