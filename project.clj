@@ -10,7 +10,7 @@
                  [org.clojure/java.jdbc "0.7.1"]
                  [org.slf4j/slf4j-api "1.7.25"]
                  [org.slf4j/slf4j-log4j12 "1.7.25"]
-                 [org.apache.hbase/hbase-client "1.2.3"]
+                 [org.apache.hbase/hbase-client "1.2.6"]
                  [org.pcap4j/pcap4j-core "1.7.1"]
                  [org.pcap4j/pcap4j-packetfactory-static "1.7.1"]
                  [com.google.guava/guava "19.0"]
