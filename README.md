@@ -1,9 +1,9 @@
 # hbase-packet-inspector
 
-_hbase-packet-inspector_ is a command-line tool for analyzing network traffic
-of HBase RegionServers.
+_hbase-packet-inspector_ (HPI) is a command-line tool for analyzing network
+traffic of HBase RegionServers.
 
-It reads tcpdump files or captures live stream of packets of a network
+HPI reads tcpdump files or captures live stream of packets of a network
 interface to extract the information on client requests and responses.
 
 You can configure it to load the obtained information either to its in-memory
@@ -24,20 +24,20 @@ Options:
   -c --count=COUNT          Maximum number of packets to process
   -d --duration=DURATION    Number of seconds to capture packets
   -k --kafka=SERVERS/TOPIC  Kafka bootstrap servers and the name of the topic
-                              TOPIC:
-                                T      Both requests and responses to T
-                                T1/T2  Requests to T1, responses to T2
-                                T/     Requests to T, responses are ignored
-                                /T     Requests are ignored, responses to T
+                              /TOPIC:
+                                /T      Both requests and responses to T
+                                /T1/T2  Requests to T1, responses to T2
+                                /T/     Requests to T, responses are ignored
+                                //T     Requests are ignored, responses to T
   -v --verbose              Verbose output
 ```
 
-When file arguments are not given, hbase-packet-inspector will capture live
-stream of packets from a network interface (root permission is required). It
-will continue until a specified time has passed (`--duration`), or a certain
-number of packets have been processed (`--count`), or the user interrupted it
-by pressing enter key. Then it will launch command-line and web-based SQL
-interfaces so you can analyze the results using SQL.
+When file arguments are not given, HPI will capture the live stream of packets
+from a network interface (root permission required). It will continue until
+a specified time has passed (`--duration`), or a certain number of packets
+have been processed (`--count`), or the user interrupted it by pressing the
+enter key. Then it will launch command-line and web-based SQL interfaces so
+you can analyze the results using SQL.
 
 ![In-memory database](images/h2.png)
 
@@ -68,10 +68,10 @@ java -Xmx2g -jar hbase-packet-inspector --help
 ### Kafka
 
 Since the size of memory is limited, you'll have to interrupt the live capture
-at a certain point of time to avoid OOM. But if you want to keep
-hbase-packet-inspector alive to monitor the traffic for longer periods of
-time, you can make it send records to a remote Kafka cluster in JSON format
-instead of building the in-memory database.
+at a certain point of time to avoid OOM. But if you want to keep HPI alive to
+monitor the traffic for longer periods of time, you can make it send records
+to a remote Kafka cluster in JSON format instead of building the in-memory
+database.
 
 ```sh
 # Both requests and responses are sent to hbase-traffic topic.
@@ -198,8 +198,8 @@ docker run -v $(PWD)/dev-resources:/data -it hpi-test-env /data/generate-fixture
 
 ### Testing functions on REPL
 
-Familiarize yourself with the way hbase-packet-inspector works by trying out
-the following snippet on Clojure REPL (`lein repl`).
+Familiarize yourself with the way HPI works by trying out the following
+snippet on Clojure REPL (`lein repl`).
 
 ```clojure
 (ns user
@@ -235,15 +235,29 @@ the following snippet on Clojure REPL (`lein repl`).
   {:port 16201})
 ```
 
-## Caveats
+## Caveats and known issues
 
-- If the rate of the packet stream exceeds the processing capacity of
-  hbase-packet-inspector, packets will be dropped, and it will not be able to
-  capture the precise statistics of the workload.
-- Please be aware that hbase-packet-inspector uses CPU for processing and
-  interpreting the packet stream, and it may affect the performance of the
-  RegionServer if it's already heavily loaded.
-    - hbase-packet-inspector will occupy up to `2 + min(2, floor(TOTAL_NUMBER_OF_CORES / 4))` cores
+- If the rate of the packet stream exceeds the processing capacity of HPI,
+  packets will be dropped, and HPI will not be able to capture the precise
+  statistics of the workload.
+
+- HPI uses [libpcap][pcap] to capture packets, and it's [known to be
+  expensive][tcpdump-impact]. You have to be aware that running HPI (or just
+  tcpdump) can degrade the peak performance of the server by up to 20%. Our
+  rule of thumb is to run it only on RegionServers with relatively low CPU
+  usage (e.g. less than 50%) or on application servers as HPI can correctly
+  determine which peer is the RegionServer by examining the port numbers.
+
+  [pcap]: https://en.wikipedia.org/wiki/Pcap
+  [tcpdump-impact]: https://www.percona.com/blog/2015/04/10/measuring-impact-tcpdump-busy-hosts/
+
+- HPI is inherently more expensive than tcpdump. It has to process and
+  interpret the packet stream, and build in-memory database or send the
+  information to Kafka after gzip compression. The whole process can occupy up
+  to `2 + min(2, floor(TOTAL_NUMBER_OF_CORES / 4))` cores or your server. So
+  if you're concerned about the CPU usage of the server, you might want to
+  dump the packets using tcpdump, copy it to another server and run HPI
+  there. Or you can deploy HPI on application servers as noted above.
 
 ## License
 
