@@ -1,4 +1,4 @@
-(ns hbase-packet-inspector.sink.common
+(ns hbase-packet-inspector.pool
   (:require [clojure.tools.logging :as log]
             [grouper.core :as grouper]))
 

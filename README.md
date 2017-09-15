@@ -220,12 +220,11 @@ the following snippet on Clojure REPL (`lein repl`).
 (def connection
   (doto (db/connect) db/create))
 
-(let [[load close] (db/load-and-close-fn connection)]
+(let [load (db/load-fn connection)]
   (core/read-pcap-file
     (.getPath (io/resource "scan.pcap"))
     load
-    {:port 16201})
-  (close))
+    {:port 16201}))
 
 (jdbc/query {:connection connection} "select count(*) from requests")
 

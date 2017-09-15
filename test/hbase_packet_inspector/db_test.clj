@@ -21,7 +21,7 @@
         (doseq [table tables]
           (is (empty? (q (str "select * from " (name table))))))
 
-        (let [[load close] (db/load-and-close-fn connection)]
+        (let [load (db/load-fn connection)]
           (load {:client :foo
                  :port 1000
                  :row nil
@@ -31,8 +31,7 @@
                  :port 2000
                  :row "row"
                  :inbound? false
-                 :results [{:client :BAR} {:client :BAZ}]})
-          (close))
+                 :results [{:client :BAR} {:client :BAZ}]}))
 
         (let [rows (into {} (for [table tables]
                               [table (q (str "select * from " (name table)))]))]

@@ -1,6 +1,5 @@
 (ns hbase-packet-inspector.sink.kafka
-  (:require [cheshire.core :as json]
-            [hbase-packet-inspector.sink.common :refer [create-batch-pool]])
+  (:require [cheshire.core :as json])
   (:import (java.util Properties)
            (org.apache.kafka.clients.producer KafkaProducer ProducerConfig
                                               ProducerRecord)))
@@ -56,24 +55,22 @@
 (defn send-fn
   "Returns send function for sending formatted record to the specified sender"
   [^ISender sender extra-pairs]
-  (fn [[topic record]]
+  (fn [topic record]
     (let [ts     (.getTime ^java.sql.Timestamp (:ts record))
           record (merge (assoc record :ts ts) extra-pairs)]
       (.send sender (make-record topic record)))))
 
 (defn send-and-close-fn
   "Returns two functions; one for sending records to Kafka as json format
-  records, and another for closing the batch pool and Kafka producer."
+  records, and another for closing the Kafka producer."
   [bootstrap-servers topic1 topic2 & [extra-pairs]]
   (let [sender     (create-sender bootstrap-servers)
-        send       (send-fn sender (merge {:hostname (hostname)} extra-pairs))
-        batch-pool (create-batch-pool send)]
+        send       (send-fn sender (merge {:hostname (hostname)} extra-pairs))]
     [(fn [record]
        {:pre [(contains? record :inbound?)
               (contains? record :ts)]}
        (let [topic (if (:inbound? record) topic1 topic2)]
          (when (seq topic)
-           (.submit batch-pool [topic record]))))
+           (send topic record))))
      (fn []
-       (.close batch-pool)
        (.close sender))]))

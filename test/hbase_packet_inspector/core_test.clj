@@ -34,7 +34,10 @@
   (is (valid-length? 1024)))
 
 (deftest test-process-scan-state
-  (let [client :alice
+  (let [client ["host" 1234]
+        process (fn [state client-key parsed]
+                  (let [[state parsed] (process-scan-state (transient state) client-key parsed)]
+                    [(persistent! state) parsed]))
         state0 {}
 
         open-req {:method   :open-scanner
@@ -43,53 +46,53 @@
                   :ts       2016
                   :table    "foo"
                   :region   "bar"}
-        [state1  _] (process-scan-state state0 client open-req)
+        [state1  _] (process state0 client open-req)
 
         open-res {:method   :open-scanner
                   :inbound? false
                   :call-id  100
                   :scanner  1000}
-        [state2 _] (process-scan-state state1 client open-res)
+        [state2 _] (process state1 client open-res)
 
         next-req {:method   :next-rows
                   :inbound? true
                   :ts       2017
                   :scanner  1000}
-        [state3 next-req*] (process-scan-state state2 client next-req)
+        [state3 next-req*] (process state2 client next-req)
 
         next-res {:method   :next-rows
                   :inbound? false
                   :ts       2018
                   :scanner  1000}
-        [state4 next-res*] (process-scan-state state3 client next-res)
+        [state4 next-res*] (process state3 client next-res)
 
         close-req {:method :close-scanner
                    :inbound? true
                    :scanner 1000}
-        [state5 close-req] (process-scan-state state4 client close-req)
+        [state5 close-req] (process state4 client close-req)
 
         small-scan-req {:method   :small-scan
                         :call-id  200
                         :table    "foo"
                         :region   "bar"
                         :inbound? true}
-        [state6 small-scan-req*] (process-scan-state state5 client small-scan-req)
+        [state6 small-scan-req*] (process state5 client small-scan-req)
 
         small-scan-res {:method   :small-scan
                         :call-id  200
                         :inbound? false}
-        [state7 _] (process-scan-state state6 client small-scan-res)
-        [state8 unknown] (process-scan-state state7 client {:method :unknown})]
+        [state7 _] (process state6 client small-scan-res)
+        [state8 unknown] (process state7 client {:method :unknown})]
     ;; The call ID of open-scanner request is mapped to the request
-    (is (contains? state1 [:scanner-for :alice 100]))
-    (is (not (contains? state1 [:scanner 1000])))
-    (is (= open-req (state1 [:scanner-for :alice 100])))
+    (is (contains? state1 ["host" 1234 100 :scanner]))
+    (is (not (contains? state1 1000)))
+    (is (= open-req (state1 ["host" 1234 100 :scanner])))
 
     ;; Scanner ID only becomes known on open-scanner response
     ;; We map scanner ID to the initial open-scanner request
-    (is (not (contains? state2 [:scanner-for :alice 100])))
-    (is (contains? state2 [:scanner 1000]))
-    (is (= open-req (state2 [:scanner 1000])))
+    (is (not (contains? state2 ["host" 1234 100 :scanner])))
+    (is (contains? state2 1000))
+    (is (= open-req (state2 1000)))
 
     ;; The response and request are augmented with the initial open-scanner
     ;; request.
@@ -108,7 +111,7 @@
 
     ;; Small scan state
     (is (= 1 (count state6)))
-    (is (contains? state6 [:scanner-for :alice 200]))
+    (is (contains? state6 ["host" 1234 200 :scanner]))
     (is (= "foo" (-> state6 vals first :table)))
     (is (= "bar" (-> state6 vals first :region)))
 

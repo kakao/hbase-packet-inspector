@@ -6,6 +6,7 @@
             [clojure.tools.cli :as cli]
             [clojure.tools.logging :as log]
             [hbase-packet-inspector.hbase :as hbase]
+            [hbase-packet-inspector.pool :as pool]
             [hbase-packet-inspector.pcap :as pcap]
             [hbase-packet-inspector.sink.db :as db]
             [hbase-packet-inspector.sink.kafka :as kafka])
@@ -101,37 +102,39 @@ Options:
 (defn process-scan-state
   "Manages state transition during Scan lifecycle. Returns the pair of new
   state map and the augmented parsed info."
-  [state client parsed]
+  [state client-key parsed]
   (let [{:keys [method inbound? call-id scanner ts]} parsed
-        region-info (select-keys (state [:scanner scanner]) [:table :region])]
+        prefix (conj client-key call-id)
+        scanner-state (state scanner)
+        region-info (select-keys scanner-state [:table :region])]
     (match [method inbound?]
 
       ;; 1. Remember Scan request for call-id
       [(:or :open-scanner :small-scan) true]
-      [(assoc state [:scanner-for client call-id] parsed) parsed]
+      [(assoc! state (conj prefix :scanner) parsed) parsed]
 
       ;; 2. Find Scan request for call-id and map it to the scanner-id
       [:open-scanner false]
-      (let [key     [:scanner-for client call-id]
+      (let [key     (conj prefix :scanner)
             request (get state key)
-            state   (dissoc state key)
-            state   (assoc state [:scanner scanner] request)]
+            state   (dissoc! state key)
+            state   (assoc! state scanner request)]
         [state parsed])
 
       ;; 3. Attach region info from the Scan request for the scanner-id
       ;;    and update timestamp of the scanner state
       [:next-rows _]
-      [(update state [:scanner scanner] assoc :ts ts)
+      [(assoc! state scanner (assoc scanner-state :ts ts))
        (merge parsed region-info)]
 
       ;; 4. Discard Scan request from the state
       [:close-scanner true]
-      [(dissoc state [:scanner scanner]) (merge parsed region-info)]
+      [(dissoc! state scanner) (merge parsed region-info)]
 
       ;; State transition is simpler for small scans
       [:small-scan false]
-      (let [key [:scanner-for client call-id]]
-        [(dissoc state key) parsed])
+      (let [key (conj prefix :scanner)]
+        [(dissoc! state key) parsed])
 
       [_ _] [state parsed])))
 
@@ -151,10 +154,10 @@ Options:
   state for the next iteration. state map can have the following types of
   states.
 
-  [:client client]              => ByteArrayOutputStream
-  [:call client call-id]        => Request
-  [:scanner-for client call-id] => ScanRequest
-  [:scanner scanner-id]         => ScanRequest
+  [addr port]                  => ByteArrayOutputStream
+  [addr port call-id]          => Request
+  [addr port call-id :scanner] => ScanRequest
+  scanner-id                   => ScanRequest
 
   (call-id is not globally unique)
 
@@ -179,7 +182,7 @@ Options:
         inbound?      (some? (ports (-> packet-map :dst :port)))
         server        (packet-map (if inbound? :dst :src))
         client        (packet-map (if inbound? :src :dst))
-        client-key    [:client client]
+        client-key    ((juxt :addr :port) client)
         client-state  (state client-key)
         base-map      {:ts       timestamp
                        :inbound? inbound?
@@ -187,25 +190,25 @@ Options:
                        :client   (:addr client)
                        :port     (:port client)}
         expects-more  (fn [state ^ByteArrayInputStream bais size expects]
-                        (assoc state client-key
-                               {:ts timestamp :ins [bais] :size size :expects expects}))
+                        (assoc! state client-key
+                                {:ts timestamp :ins [bais] :size size :expects expects}))
         next-state    (fn [state parsed]
                         ;; Only responses for known requests have previous :ts
                         (let [prev-ts (:ts parsed)
                               parsed (if prev-ts
                                        (assoc parsed :elapsed (sub-ts timestamp prev-ts))
                                        parsed)
-                              [state info] (process-scan-state state client (merge parsed base-map))
-                              state-key [:call client (:call-id parsed)]]
+                              [state info] (process-scan-state state client-key (merge parsed base-map))
+                              state-key (conj client-key (:call-id parsed))]
                           (proc-fn info)
-                          (dissoc (if inbound?
-                                    (assoc state state-key info)
-                                    (dissoc state state-key))
-                                  client-key)))
+                          (dissoc! (if inbound?
+                                     (assoc! state state-key info)
+                                     (dissoc! state state-key))
+                                   client-key)))
         advance-state (fn [state bais size remains]
                         ;; A single packet may have multiple messages
                         ;;   e.g. Nagle's algorithm, Asynchbase
-                        (let [request-finder (when-not inbound? #(state [:call client %]))
+                        (let [request-finder (when-not inbound? #(state (conj client-key %)))
                               parsed         (parse-stream inbound? bais size request-finder)
                               state          (next-state state parsed)
                               size           (if (pos? remains) (read-int4 bais) 0)
@@ -244,16 +247,16 @@ Options:
                 expects (- expects (count data))]
             (if (pos? expects)
               ;; Still needs more
-              (assoc state client-key
-                     (assoc client-state
-                            :ins ins :ts timestamp :expects expects))
+              (assoc! state client-key
+                      (assoc client-state
+                             :ins ins :ts timestamp :expects expects))
               ;; Finally ready to advance state
               (advance-state state (SequenceInputStream. (java.util.Collections/enumeration ins)) size (- expects)))))
         (catch Exception e
           (when-not (instance? InvalidProtocolBufferException e)
             (log/warn e))
           ;; Discard byte stream for the client
-          (dissoc state client-key))))))
+          (dissoc! state client-key))))))
 
 (defn send!
   "Sends request/response information into sink (H2 database or Kafka)"
@@ -282,11 +285,11 @@ Options:
 (defn trim-state-expired
   "Removes state objects that are not handled correctly within the period"
   [state latest-ts]
-  (let [new-state (->> state
-                       (remove (fn [[_ v]]
-                                 (> (sub-ts latest-ts (:ts v))
-                                    state-expiration-ms)))
-                       (into {}))
+  (let [new-state (reduce-kv (fn [s k v]
+                               (if (<= (sub-ts latest-ts (:ts v))
+                                       state-expiration-ms)
+                                 (assoc s k v) s))
+                             {} state)
         xcount    (- (count state) (count new-state))]
     (when (pos? xcount)
       (log/infof "Expired %d state object(s)" xcount))
@@ -352,44 +355,46 @@ Options:
   responses"
   [chan close-chan sink stats-fn {:keys [port verbose count duration]}]
   {:pre [(or (nil? count) (pos? count))]}
-  (async/thread
-    (let [sink     (partial send! sink verbose)
-          duration (some-> duration (* 1000))
-          ports    (if port (hash-set port) hbase-ports)]
-      (loop [state    {}
-             first-ts nil
-             seen     0
-             prev     {:seen 0 :ts (System/currentTimeMillis)}]
-        (let [[latest-ts packet-map] (async/<!! chan)]
-          (if (nil? latest-ts)
-            (async/>!! close-chan seen)
-            (let [first-ts  (or first-ts latest-ts)
-                  new-state (process-hbase-packet
-                             packet-map ports latest-ts state sink)
-                  now       (System/currentTimeMillis)
-                  seen      (inc seen)
-                  tdiff     (- now  (:ts   prev))
-                  diff      (- seen (:seen prev))
-                  print?    (or (>= tdiff (:ms report-interval))
-                                (>= diff  (:count report-interval)))]
-              (when print?
-                (logger seen (stats-fn)))
-              (if (and (or (nil? count) (< seen count))
-                       (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
-                (if print?
-                  (recur (trim-state new-state latest-ts)
-                         first-ts seen {:seen seen :ts now})
-                  (recur new-state first-ts seen prev))
-                (do (async/close! chan) ;; No more puts
-                    (async/alts!! [chan (async/timeout 100)])
-                    (async/>!! close-chan seen))))))))))
+  (let [pool (pool/create-batch-pool (partial send! sink verbose))]
+    (async/thread
+      (let [submit   (fn [info] (.submit pool info))
+            duration (some-> duration (* 1000))
+            ports    (if port (hash-set port) hbase-ports)]
+        (loop [state    (transient {})
+               first-ts nil
+               seen     0
+               prev     {:seen 0 :ts (System/currentTimeMillis)}]
+          (let [[latest-ts packet-map] (async/<!! chan)]
+            (if (nil? latest-ts)
+              (async/>!! close-chan seen)
+              (let [first-ts  (or first-ts latest-ts)
+                    new-state (process-hbase-packet
+                               packet-map ports latest-ts state submit)
+                    now       (System/currentTimeMillis)
+                    seen      (inc seen)
+                    tdiff     (- now  (:ts   prev))
+                    diff      (- seen (:seen prev))
+                    print?    (or (>= tdiff (:ms report-interval))
+                                  (>= diff  (:count report-interval)))]
+                (when print?
+                  (logger seen (stats-fn)))
+                (if (and (or (nil? count) (< seen count))
+                         (or (nil? duration) (< (sub-ts latest-ts first-ts) duration)))
+                  (if print?
+                    (recur (transient (trim-state (persistent! new-state) latest-ts))
+                           first-ts seen {:seen seen :ts now})
+                    (recur new-state first-ts seen prev))
+                  (do (async/close! chan) ;; No more puts
+                      (async/alts!! [chan (async/timeout 100)])
+                      (async/>!! close-chan seen)))))))))
+    (fn [] (.close pool))))
 
 (defn read-handle
   "Reads packets from the handle and passes each packet to handler thread"
   [^PcapHandle handle sink stats-fn & [options]]
   (let [chan (async/chan 10000)
-        close-chan (async/chan)]
-    (start-handler chan close-chan sink stats-fn options)
+        close-chan (async/chan)
+        closer (start-handler chan close-chan sink stats-fn options)]
     (loop []
       (let [packet-map (pcap/parse-next-packet handle)]
         (case packet-map
@@ -402,7 +407,8 @@ Options:
           (recur)
 
           (when (async/>!! chan [(.getTimestamp handle) packet-map])
-            (recur)))))))
+            (recur)))))
+    (closer)))
 
 (defn read-pcap-file
   "Loads pcap file into in-memory h2 database"
@@ -480,9 +486,8 @@ Options:
   (let [connection (db/connect)]
     (log/info "Creating database schema")
     (db/create connection)
-    (let [[load close] (db/load-and-close-fn connection)]
+    (let [load (db/load-fn connection)]
       (process load)
-      (close)
       (let [{:keys [server url]} (db/start-web-server connection)]
         (log/info "Started web server:" url)
         (db/start-shell connection)

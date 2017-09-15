@@ -1,7 +1,6 @@
 (ns hbase-packet-inspector.sink.db
   (:require [clojure.java.jdbc :as jdbc]
-            [clojure.string :as str]
-            [hbase-packet-inspector.sink.common :refer [create-batch-pool]])
+            [clojure.string :as str])
   (:import (java.sql Connection PreparedStatement Statement)
            (org.h2.server.web WebServer)
            (org.h2.tools Server Shell)))
@@ -87,19 +86,17 @@
               :else          (.setObject pstmt idx val)))
           (.execute pstmt))))))
 
-(defn load-and-close-fn
+(defn load-fn
   [^Connection connection]
-  (let [inserter (prepared-insert-fn connection)
-        pool (create-batch-pool
-              (fn [values]
-                {:pre [(contains? values :inbound?)]}
-                (let [table   (if (:inbound? values) :requests :responses)
-                      actions (:actions values)
-                      results (:results values)]
-                  (inserter table (dissoc values :actions :results))
-                  (doseq [action actions] (inserter :actions action))
-                  (doseq [result results] (inserter :results result)))))]
-    [#(.submit pool %) #(.close pool)]))
+  (let [inserter (prepared-insert-fn connection)]
+    (fn [values]
+      {:pre [(contains? values :inbound?)]}
+      (let [table   (if (:inbound? values) :requests :responses)
+            actions (:actions values)
+            results (:results values)]
+        (inserter table (dissoc values :actions :results))
+        (doseq [action actions] (inserter :actions action))
+        (doseq [result results] (inserter :results result))))))
 
 (defn start-shell
   "Starts interactive command-line SQL client"

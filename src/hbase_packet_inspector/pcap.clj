@@ -46,7 +46,7 @@
         data        (when tcp (.getPayload tcp))
         ipv4-header (when ipv4 (.getHeader ipv4))
         tcp-header  (when tcp (.getHeader tcp))]
-    (when (every? some? [data ipv4-header tcp-header])
+    (when (and data ipv4-header tcp-header)
       {:src {:addr (.. ipv4-header getSrcAddr getHostAddress)
              :port (.. tcp-header  getSrcPort valueAsInt)}
        :dst {:addr (.. ipv4-header getDstAddr getHostAddress)
