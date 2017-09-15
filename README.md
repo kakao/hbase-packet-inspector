@@ -102,6 +102,11 @@ Shipping the information to Kafka has the following benefits:
 
 ![Kafka example](images/kafka.png)
 
+Note that HPI doesn't have to run on RegionServers. You can deploy it on
+application servers running HBase client processes.
+
+![HPI on application servers](images/kafka-alternative.png)
+
 ## Database schema
 
 ![Database schema](images/schema.png)
@@ -246,7 +251,7 @@ snippet on Clojure REPL (`lein repl`).
   tcpdump) can degrade the peak performance of the server by up to 20%. Our
   rule of thumb is to run it only on RegionServers with relatively low CPU
   usage (e.g. less than 50%) or on application servers as HPI can correctly
-  determine which peer is the RegionServer by examining the port numbers.
+  determine which peer is a RegionServer by examining the port numbers.
 
   [pcap]: https://en.wikipedia.org/wiki/Pcap
   [tcpdump-impact]: https://www.percona.com/blog/2015/04/10/measuring-impact-tcpdump-busy-hosts/
