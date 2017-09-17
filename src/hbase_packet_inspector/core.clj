@@ -152,12 +152,12 @@ Options:
 (defn process-hbase-packet
   "Executes proc-fn with with the map parsed from a packet. Returns the new
   state for the next iteration. state map can have the following types of
-  states.
+  state entries.
 
-  [addr port]                  => ByteArrayOutputStream
-  [addr port call-id]          => Request
-  [addr port call-id :scanner] => ScanRequest
-  scanner-id                   => ScanRequest
+    [addr port]                  => List of ByteArrayInputStreams
+    [addr port call-id]          => Request map
+    [addr port call-id :scanner] => Request map for Scan
+    scanner-id                   => Request map for Scan
 
   (call-id is not globally unique)
 
@@ -296,12 +296,15 @@ Options:
     new-state))
 
 (defn expected-memory-usage
-  "Memory needed to parse the object"
+  "Total memory needed for the object"
   ^long [[_ state-props]]
-  (let [{:keys [out remains] :or {remains 0}} state-props]
-    (+ remains (if out
-                 (.size ^ByteArrayOutputStream out)
-                 0))))
+  (or (:size state-props) 0))
+
+(defn current-memory-usage
+  "The amount of memory currently allocated for the object"
+  ^long [[_ state-props]]
+  (let [{:keys [size expects] :or {size 0 expects 0}} state-props]
+    (- size expects)))
 
 (defn fmt-bytes
   [bytes]
@@ -321,7 +324,7 @@ Options:
   available memory."
   [state]
   (let [memory-max   (max-memory)
-        memory-used  (reduce + (map expected-memory-usage state))
+        memory-used  (reduce + (map current-memory-usage state))
         memory-limit (quot memory-max 2)]
     (if (< memory-used memory-limit)
       state

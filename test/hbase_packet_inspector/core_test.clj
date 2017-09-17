@@ -204,29 +204,43 @@
          (core/select-nif)))))
 
 (deftest test-state
+  (testing "current-memory-usage"
+    (is (= 0 (core/current-memory-usage [:a {}])))
+    (is (= 100 (core/current-memory-usage [:a {:size 100}])))
+    (is (= 70 (core/current-memory-usage [:a {:size 100 :expects 30}]))))
+
   (testing "expected-memory-usage"
     (is (= 0 (core/expected-memory-usage [:a {}])))
-    (is (= 100 (core/expected-memory-usage [:a {:remains 100}])))
-    (let [baos (ByteArrayOutputStream.)]
-      (ByteStreams/copy (ByteArrayInputStream. (byte-array 200)) baos)
-      (is (= (+ 100 200) (core/expected-memory-usage [:a {:remains 100 :out baos}])))))
+    (is (= 100 (core/expected-memory-usage [:a {:size 100}]))))
 
   (testing "trim-state-by-memory"
-    (is (= #{1 2 3}
-           (set (keys (with-redefs [core/max-memory (constantly 140)]
-                        (core/trim-state-by-memory
-                         {1 {:remains 10}
-                          2 {:remains 20}
-                          3 {:remains 30}
-                          4 {:remains 40}})))))))
+    (with-redefs [core/max-memory (constantly (* 70 2))]
+      (is (= #{1 2 3}
+             (set (keys (core/trim-state-by-memory
+                         {1 {:size 10}
+                          2 {:size 20}
+                          3 {:size 30}
+                          4 {:size 40}})))))
+      (is (= #{1 3}
+             (set (keys (core/trim-state-by-memory
+                         {1 {:size 20}
+                          2 {:size 40 :expects 15}
+                          3 {:size 30}
+                          4 {:size 50 :expects 30}})))))
+      (is (= #{1 2 3 4}
+             (set (keys (core/trim-state-by-memory
+                         {1 {:size 10 :expects 10}
+                          2 {:size 20 :expects 10}
+                          3 {:size 30 :expects 10}
+                          4 {:size 40 :expects 10}})))))))
 
   (testing "trim-state; first by the expiration date, then by the memory limit"
     (is (= #{2 3}
            (set (keys (with-redefs [core/max-memory (constantly 140)]
-                        (core/trim-state {1 {:remains 10 :ts (java.sql.Timestamp. 0)}
-                                          2 {:remains 20 :ts (java.sql.Timestamp. 20)}
-                                          3 {:remains 30 :ts (java.sql.Timestamp. 20)}
-                                          4 {:remains 40 :ts (java.sql.Timestamp. 20)}}
+                        (core/trim-state {1 {:size 10 :ts (java.sql.Timestamp. 0)}
+                                          2 {:size 20 :ts (java.sql.Timestamp. 20)}
+                                          3 {:size 30 :ts (java.sql.Timestamp. 20)}
+                                          4 {:size 40 :ts (java.sql.Timestamp. 20)}}
                                          (java.sql.Timestamp.
                                           (+ 10 core/state-expiration-ms))))))))))
 
