@@ -1,6 +1,7 @@
 # hbase-packet-inspector
 
 [![Build Status](https://travis-ci.org/kakao/hbase-packet-inspector.svg?branch=master)](https://travis-ci.org/kakao/hbase-packet-inspector)
+[![codecov](https://codecov.io/gh/kakao/hbase-packet-inspector/branch/master/graph/badge.svg)](https://codecov.io/gh/kakao/hbase-packet-inspector)
 
 _hbase-packet-inspector_ (HPI) is a command-line tool for analyzing network
 traffic of HBase RegionServers.
