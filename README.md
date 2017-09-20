@@ -46,26 +46,18 @@ you can analyze the results using SQL.
 
 ### Examples
 
-`hbase-packet-inspector` is an executable JAR file, but you can directly run
-it once you set the executable flag.
+Each version of HPI is distributed as an executable JAR file.
 
 ```sh
-# Setting the executable flag
-chmod +x hbase-packet-inspector
-./hbase-packet-inspector --help
+# With JVM options
+java -Xmx2g -jar hbase-packet-inspector-0.2.0.jar --help
 
 # Reading from tcpdump output
 sudo tcpdump -s 0 -c 100000 -nn -w dump.pcap port 16020 or port 60020
-./hbase-packet-inspector dump.pcap
+java -jar hbase-packet-inspector-0.2.0.jar dump.pcap
 
 # Capturing live stream of packets; continues until you press enter
-sudo ./hbase-packet-inspector
-```
-
-Alternatively, you can start it with java command to pass extra JVM options.
-
-```sh
-java -Xmx2g -jar hbase-packet-inspector --help
+sudo java -jar hbase-packet-inspector-0.2.0.jar
 ```
 
 ### Kafka
@@ -176,8 +168,9 @@ sent to Kafka as JSON record.
 ## Build
 
 ```sh
-# Requires leiningen
-lein bin
+# Build executable uber JAR file using Leiningen
+#   -> target/hbase-packet-inspector-<VERSION>.jar
+lein uberjar
 ```
 
 ## Development
