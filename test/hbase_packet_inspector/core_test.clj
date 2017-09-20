@@ -5,6 +5,7 @@
             [clojure.tools.logging :as log]
             [clojure.tools.cli :refer [parse-opts]]
             [hbase-packet-inspector.core :refer :all :as core]
+            [hbase-packet-inspector.pool :as pool]
             [hbase-packet-inspector.sink.kafka :as kafka]
             [hbase-packet-inspector.kafka-test :as kt])
   (:import (java.sql Timestamp)
@@ -357,7 +358,12 @@
                       log/log* (fn [& _] (swap! observed inc))]
           (read-fixture :increment {:verbose true})
           ;; 2 logs for each entry + completion log
-          (is (> @observed (+ (* 2 all-count) 1)))))))
+          (is (> @observed (+ (* 2 all-count) 1))))))
+
+    (testing "With different number of threads"
+      (doseq [cores [1 2 4 8 16]]
+        (with-redefs [pool/num-cores (constantly cores)]
+          (is (= all-count (count (read-fixture :increment))))))))
 
   (deftest test-with-kafka*
     (let [history (atom [])]
