@@ -69,6 +69,8 @@ to a remote Kafka cluster in JSON format instead of building the in-memory
 database.
 
 ```sh
+alias hbase-packet-inspector='java -Xmx2g -jar hbase-packet-inspector-0.2.0.jar'
+
 # Both requests and responses are sent to hbase-traffic topic.
 # - See boolean "inbound?" field to differentiate two types of records
 hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-traffic"
@@ -83,7 +85,8 @@ hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-requests/"
 hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092//hbase-requests"
 
 # Additional key-value pairs to be included in each record
-hbase-packet-inspector --kafka "bootstrap1:9092,bootstrap2:9092/hbase-traffic?service=twitter&cluster=feed"
+hbase-packet-inspector \
+    --kafka "bootstrap1:9092,bootstrap2:9092/hbase-traffic?service=twitter&cluster=feed"
 ```
 
 Shipping the information to Kafka has the following benefits:
