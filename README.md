@@ -170,9 +170,10 @@ sent to Kafka as JSON record.
 
 ## Build
 
+- Prerequisite: [Leiningen](https://leiningen.org/)
+
 ```sh
-# Build executable uber JAR file using Leiningen
-#   -> target/hbase-packet-inspector-<VERSION>.jar
+# Build executable uber JAR file -> target/hbase-packet-inspector-<VERSION>.jar
 lein uberjar
 ```
 
