@@ -471,7 +471,7 @@ Options:
     {:servers servers
      :topic1 topic1
      :topic2 (or topic2 topic1)
-     :extra-pairs (query->map query)}))
+     :extra-pairs extra-pairs}))
 
 (defn with-kafka*
   "Executes process function with Kafka sink"
@@ -512,8 +512,8 @@ Options:
 
 (defn -main
   [& args]
-  (let [{:keys [options arguments errors]} (parse-opts! args)
-        {:keys [port verbose count duration interface kafka help]} options]
+  (let [{:keys [options arguments]} (parse-opts! args)
+        {:keys [interface kafka]} options]
     (let [with-sink* (if kafka (partial with-kafka* kafka) with-db*)]
       (try
         (with-sink*
