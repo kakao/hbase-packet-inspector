@@ -1,0 +1,124 @@
+#!/bin/bash
+# Starts hbase-packet-inspector daemon
+#
+# chkconfig: 345 90 10
+# description: hbase-packet-inspector daemon
+#
+### BEGIN INIT INFO
+# Provides: hbase-packet-inspector
+# Required-Stop: $local_fs $network
+# Required-Start: $local_fs $network
+# Default-Start: 3 4 5
+# Default-Stop: 0 1 2 6
+# Short-Description: start and stop hbase-packet-inspector daemon
+# Description: Monitors HBase packets and sends them to Kafka
+### END INIT INFO
+
+# Sample in /usr/share/doc/initscripts-*/sysvinitfiles
+
+. /etc/rc.d/init.d/functions
+
+# 0 - success
+# 1 - generic or unspecified error
+# 2 - invalid or excess argument(s)
+# 3 - unimplemented feature (e.g. "reload")
+# 4 - insufficient privilege
+# 5 - program is not installed
+# 6 - program is not configured
+# 7 - program is not running
+
+[ $EUID = 0 ] || exit 4
+
+prog=hbase-packet-inspector
+proghome=/usr/lib/$prog
+jar=$proghome/lib/$prog.jar
+conf=$proghome/conf/$prog.properties
+logconf=$proghome/conf/log4j.properties
+
+[ -f "$jar" ] || exit 5
+
+check_file() {
+  local f
+  for f in "$@"; do
+    if [ ! -f "$f" ]; then
+      echo "$f is not found"
+      exit 6
+    fi
+  done
+}
+
+check_file "$conf" "$logconf"
+
+getval() {
+  local val
+  val=$(grep -Po "^ *$1 *= *\K[^#]*" < "$conf" | tail -1)
+  if [ -z "$val" ]; then
+    echo "$1 not found in $conf"
+    return 1
+  fi
+  echo "$val"
+}
+
+get_cluster() {
+  if [ -f /etc/hadoop/conf/core-site.xml ]; then
+    local cluster
+    cluster=$(sed -n '/fs.defaultFS/ {n; s|.*://||; s|<.*||; p}' /etc/hadoop/conf/core-site.xml)
+    [ -n "$cluster" ] && echo "?cluster=$cluster"
+  fi
+}
+
+kafka=$(getval kafka) || exit 6
+[[ "$kafka" =~ '?' ]] || kafka=$kafka$(get_cluster)
+device=$(getval device) || exit 6
+options="--interface $device --kafka $kafka"
+cmd="java -Xmx2g -Dlog4j.configuration=file:$logconf -jar $jar $options"
+
+pidfile=/var/run/$prog.pid
+
+start() {
+  status "$prog" && exit 1
+
+  echo -n "Starting $prog: "
+  java -jar "$jar" --help > /dev/null || exit 1
+  daemon --check "$prog" "nohup $cmd < /dev/null > /dev/null 2>&1 & echo \$! > $pidfile"
+  ret=$?
+  touch /var/lock/subsys/$prog
+  echo
+  return $ret
+}
+
+stop() {
+  echo -n "Shutting down $prog: "
+  killproc "$prog"
+  ret=$?
+  rm -f /var/lock/subsys/$prog
+  echo
+  return $ret
+}
+
+case "$1" in
+start)
+  start
+  ;;
+stop)
+  stop
+  ;;
+restart|reload)
+  stop
+  start
+  ;;
+condrestart)
+  if [ -f /var/lock/subsys/$prog ]; then
+    stop
+    start
+  fi
+  ;;
+status)
+  status "$prog"
+  ;;
+*)
+  echo "Usage: $0 {start|stop|status|reload|restart|condrestart}"
+  exit 2
+esac
+
+exit $?

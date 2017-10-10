@@ -177,6 +177,17 @@ sent to Kafka as JSON record.
 lein uberjar
 ```
 
+### RPM for Centos 6 and 7
+
+This repository includes [Makefile](Makefile) for building RPM files for
+Centos 6 and 7 using Docker.
+
+```sh
+make rpm
+```
+
+RPM files will be created under `rpmbuild/RPMS/x86_64` directory.
+
 ## Development
 
 ### Test

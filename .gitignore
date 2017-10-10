@@ -10,3 +10,10 @@ pom.xml.asc
 /.nrepl-port
 .hgignore
 .hg/
+rpmbuild/BUILD
+rpmbuild/BUILDROOT
+rpmbuild/RPMS
+rpmbuild/SRPMS
+rpmbuild/SOURCES/*.tar.gz
+yum
+.DS_Store
