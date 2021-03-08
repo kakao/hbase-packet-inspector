@@ -149,7 +149,7 @@ Embedded as `actions` array when sent to Kafka as JSON record.
 | region     | varchar   | Encoded region name      |
 | row        | varchar   | Row key                  |
 | cells      | int       | Number of cells attached |
-| durability | varchar   | Duarbility mode          |
+| durability | varchar   | Durability mode          |
 
 ### Responses (server response)
 
